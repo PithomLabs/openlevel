@@ -174,3 +174,24 @@ describe('setup-staging CLI refusals (no database)', () => {
     expect(sql).toMatch(/CREATE SCHEMA IF NOT EXISTS app/);
   });
 });
+
+describe('applyStagingSetup role ordering (prompt24 Fix B)', () => {
+  // Static shape test: DBOS.migrate grants privileges to the runtime role,
+  // so the role must be created first — and role creation is a
+  // system-level operation, so it must run on ownSys, not ownApp. The live
+  // CI proof uses identical superuser credentials for both pools and
+  // therefore cannot detect a wrong-pool creation; this pins the target.
+  // Runtime behavior (double apply, sentinel, as-role DML) stays covered
+  // by verify-staging-apply.mjs on CI.
+  test('role creation runs on ownSys before DBOS.migrate', () => {
+    const src = readFileSync('phase0/p2/setup-staging.mjs', 'utf8');
+    const body = src.slice(src.indexOf('export async function applyStagingSetup'));
+    expect(body).toContain('await ownSys.query(createRoleStatement(appRole))');
+    expect(body).not.toContain('ownApp.query(createRoleStatement');
+    const createdAt = body.indexOf('ownSys.query(createRoleStatement(appRole))');
+    const migratedAt = body.indexOf('await DBOS.migrate(');
+    expect(createdAt).toBeGreaterThanOrEqual(0);
+    expect(migratedAt).toBeGreaterThanOrEqual(0);
+    expect(createdAt).toBeLessThan(migratedAt);
+  });
+});

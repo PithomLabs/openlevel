@@ -137,4 +137,6 @@ jobs:
         run: |
           docker run --rm p2staging:ci node --import tsx -e "import('./phase0/p2/probe-config.ts').then(async (m) => { console.log('ts+probe-config OK', m.P2_QUEUE); await import('./phase0/p2/generations.ts'); console.log('generations OK'); await import('./phase0/p2/staging-provider.ts'); console.log('staging-provider OK'); })"
           docker run --rm -e ROLE=worker -e P2_SYSTEM_DATABASE_URL=postgres://x/y -e P2_APPLICATION_DATABASE_URL=postgres://x/y -e P2_DRY_RUN=1 p2staging:ci node --import tsx phase0/p2/boot-worker.mjs | grep -q "NOT A STAGING WORKER"
-          docker run --rm -e ROLE=bogus p2staging:ci node phase0/p2/probe-web.mjs; test $? -eq 2
+          status=0
+          docker run --rm -e ROLE=bogus p2staging:ci node phase0/p2/probe-web.mjs || status=$?
+          test "$status" -eq 2

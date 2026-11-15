@@ -181,9 +181,11 @@ async function main() {
 /**
  * Apply the full staging setup over caller-supplied pools. Exported so CI
  * verifies the real path (see verify-staging-apply.mjs); the CLI above
- * only validates and prints. Order: migrate dbos schema (with runtime
- * grants when a role is given) → p2 schema → p3 schema into app →
- * role + grants. Additive and idempotent throughout.
+ * only validates and prints. Order: create the NOLOGIN role via the
+ * system pool (it must exist before DBOS grants to it) → migrate dbos
+ * schema (with runtime grants when a role is given) → p2 schema →
+ * p3 schema into app → CONNECT + application-schema grants. Additive
+ * and idempotent throughout.
  */
 export async function applyStagingSetup({ sysUrl, appUrl, dbName, appRole, sysPool, appPool }) {
   const ownSys = sysPool ?? new Pool({ connectionString: sysUrl, max: 1, connectionTimeoutMillis: 15000 });
@@ -191,6 +193,13 @@ export async function applyStagingSetup({ sysUrl, appUrl, dbName, appRole, sysPo
   try {
     const sysVer = await ownSys.query('SHOW server_version');
     const appVer = await ownApp.query('SHOW server_version');
+    // Role creation is a SYSTEM-level operation (roles are cluster-wide)
+    // and must precede DBOS.migrate: the migrate grants privileges to the
+    // role, which fails when the role does not exist yet. Via ownSys, not
+    // ownApp — the application connection must never need role privileges.
+    if (appRole) {
+      await ownSys.query(createRoleStatement(appRole));
+    }
     await DBOS.migrate(sysUrl, appRole ? { schemaName: 'dbos', applicationRole: appRole } : { schemaName: 'dbos' });
     const p2Sql = readFileSync(join(here, 'schema.sql'), 'utf8');
     for (const stmt of splitSqlStatements(p2Sql)) {
@@ -202,7 +211,6 @@ export async function applyStagingSetup({ sysUrl, appUrl, dbName, appRole, sysPo
     const p3Sql = readFileSync(join(here, '..', 'p3', 'schema.sql'), 'utf8');
     await ownApp.query(`BEGIN; SET LOCAL search_path = app; ${p3Sql} COMMIT;`);
     if (appRole) {
-      await ownApp.query(createRoleStatement(appRole));
       await ownSys.query(connectGrant(appRole, dbName));
       for (const grant of stagingGrants(appRole)) {
         await ownApp.query(grant);

@@ -30,4 +30,15 @@ describe('production dependency packaging (M1)', () => {
     expect(dockerfile).not.toMatch(/postgres:\/\//i);
     expect(dockerfile).not.toMatch(/^\s*ENV\s+(P2_|DATABASE_URL)/im);
   });
+
+  test('negative smoke test captures the exit code safely under bash -e (prompt24 Fix C)', () => {
+    const workflow = readFileSync('.github/workflows/phase0.yml', 'utf8');
+    // No bare `; test $?` after docker run: under bash -e the expected
+    // nonzero exit kills the step before the assertion runs.
+    expect(workflow).not.toMatch(/docker run[^\n]*;\s*test \$\?/);
+    // Explicit init + || capture (exempt from -e) + exact-code assertion.
+    expect(workflow).toContain('status=0');
+    expect(workflow).toMatch(/ROLE=bogus[^\n]*\|\| status=\$\?/);
+    expect(workflow).toContain('test "$status" -eq 2');
+  });
 });

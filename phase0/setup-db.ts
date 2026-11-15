@@ -29,6 +29,7 @@ import { GlobalLogger } from '@dbos-inc/dbos-sdk/internal/telemetry/logs';
 import { grantDbosSchemaPermissions } from '@dbos-inc/dbos-sdk/internal/system_database';
 import { assertDisposableUrl, parseTarget, redactUrl, verifyLiveIdentity } from './db-guard.js';
 import { recordOwnership, snapshotPrototypeTables } from './provisioners/ownership.js';
+import { PROTOTYPE_INVENTORY_SCHEMAS, PUBLIC_TRUNCATE_TABLES } from './setup-contracts.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const RUNTIME_ROLE = 'phase0_rt';
@@ -76,7 +77,8 @@ async function main(): Promise<void> {
     // - CONNECT: tests/worker must open sessions.
     // - public schema: USAGE + CRUD + sequence rights (handler CRUD,
     //   projections, bigserial inserts) + TRUNCATE on prototype tables only
-    //   (test isolation, narrow explicit list below).
+    //   (test isolation, narrow explicit allowlist in setup-contracts.ts —
+    //   P1/P3 only; P2 tables live in app and must never be listed).
     // - dbos schema: the SDK's OWN grant function (grantDbosSchemaPermissions)
     //   — DBOS internals (tables, sequences, functions) are versioned with the
     //   SDK, so hand-enumerating them risks missing a right the runtime needs.
@@ -91,23 +93,11 @@ async function main(): Promise<void> {
     await admin.query(`GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA "public" TO "${RUNTIME_ROLE}"`);
     await admin.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA "public" GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "${RUNTIME_ROLE}"`);
     await admin.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA "public" GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO "${RUNTIME_ROLE}"`);
-    const prototypeTables = [
-      'p1_business_event',
-      'p1_business_event_generation',
-      'p1_business_event_discrepancy',
-      'p1_domain_action',
-      'p1_execution_log',
-      'p2_probe_log',
-      'p3_operation',
-      'p3_attempt',
-      'p3_wallet',
-      'p3_settlement',
-    ];
-    await admin.query(`GRANT TRUNCATE ON ${prototypeTables.map((t) => `"public"."${t}"`).join(', ')} TO "${RUNTIME_ROLE}"`);
+    await admin.query(`GRANT TRUNCATE ON ${PUBLIC_TRUNCATE_TABLES.map((t) => `"public"."${t}"`).join(', ')} TO "${RUNTIME_ROLE}"`);
     console.log('grants applied (scratch DB only — NOT the production grant matrix)');
     const rels = await admin.query(
       `SELECT schemaname || '.' || tablename AS rel FROM pg_tables
-       WHERE schemaname IN ('public','dbos')
+       WHERE schemaname IN (${PROTOTYPE_INVENTORY_SCHEMAS.map((s) => `'${s}'`).join(',')})
          AND (tablename LIKE 'p1\\_%' ESCAPE '\\' OR tablename LIKE 'p2\\_%' ESCAPE '\\' OR tablename LIKE 'p3\\_%' ESCAPE '\\')
        ORDER BY 1`,
     );
