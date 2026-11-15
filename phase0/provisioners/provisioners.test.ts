@@ -8,7 +8,7 @@
  * socket attempted). Live PostgreSQL behavior is proven by Track B runs.
  */
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import {
   assertContainerIdentity,
@@ -72,10 +72,25 @@ describe('parseProvisioner', () => {
 });
 
 describe('unit file list', () => {
-  test('package.json test:phase0:unit covers every file the run command executes', () => {
+  test('UNIT_TEST_FILES equals the test:phase0:unit file list in both directions (F-01)', () => {
+    // The orchestrated `run` command executes UNIT_TEST_FILES while CI uses
+    // the package script; a one-directional substring check let them drift
+    // (setup-contracts.test.ts ran on CI but never on local full runs).
+    // Parse the script into real file tokens and demand set equality, no
+    // duplicates, and on-disk existence — order-insensitive.
     const pkg = JSON.parse(readFileSync('package.json', 'utf8')) as { scripts: Record<string, string> };
-    for (const file of UNIT_TEST_FILES) {
-      expect(pkg.scripts['test:phase0:unit']).toContain(file);
+    const scriptFiles = pkg.scripts['test:phase0:unit'].split(/\s+/).filter((t) => t.endsWith('.test.ts'));
+    expect(scriptFiles.length).toBeGreaterThan(0);
+    expect([...UNIT_TEST_FILES].sort()).toEqual([...scriptFiles].sort());
+  });
+
+  test('unit file lists have no duplicates and every file exists (F-01)', () => {
+    const pkg = JSON.parse(readFileSync('package.json', 'utf8')) as { scripts: Record<string, string> };
+    const scriptFiles = pkg.scripts['test:phase0:unit'].split(/\s+/).filter((t) => t.endsWith('.test.ts'));
+    expect(new Set(UNIT_TEST_FILES).size).toBe(UNIT_TEST_FILES.length);
+    expect(new Set(scriptFiles).size).toBe(scriptFiles.length);
+    for (const file of new Set([...UNIT_TEST_FILES, ...scriptFiles])) {
+      expect(existsSync(file)).toBe(true);
     }
   });
 });
