@@ -1,4 +1,8 @@
-# P2 fencing proof — execution checklist (Gate D)
+# P2 fencing proof — execution checklist (Gate D) — SUPERSEDED
+
+> Superseded by `phase0/p2/STAGING_ACCEPTANCE.md`, which replaces these
+> manual checkboxes with exact commands, capture steps, and assertions.
+> Preserved for history; do not execute this file.
 
 Proves V2.1 §10 on staging: exactly one active `worker-1`, no overlap,
 no blind provider repeats. All observations recorded with timestamps;

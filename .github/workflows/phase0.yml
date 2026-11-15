@@ -5,6 +5,10 @@
 #   unit       — DB-free suites, no DB
 #   app-suite  — full application suite with vault known-failure baseline gate
 #   integration — test-env.ts orchestrated P1/P3/backpressure on Testcontainers
+#   p2-boot-proof — P2 T1-positive: real probe-worker boot, heartbeat,
+#     SIGTERM drain, and generation-lifecycle assertions on service postgres
+#   p2-packaging — M1: build the real staging image, smoke-test the worker
+#     entry chain inside it (production-only dependencies)
 # Artifacts upload always, even on failure. No secrets, no cloud resources.
 name: phase0
 
@@ -88,3 +92,49 @@ jobs:
           name: phase0-integration-evidence
           path: phase0/evidence/
           retention-days: 14
+
+  p2-boot-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16.16
+        env:
+          POSTGRES_PASSWORD: p2bootproof
+          POSTGRES_DB: stagedb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      P2_SYSTEM_DATABASE_URL: postgres://postgres:p2bootproof@localhost:5432/stagedb
+      P2_APPLICATION_DATABASE_URL: postgres://postgres:p2bootproof@localhost:5432/stagedb
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci --omit=dev --no-audit --no-fund
+      - name: P2 T1-positive boot proof (real probe worker, production deps)
+        run: bash phase0/p2/ci-boot-proof.sh
+      - name: P2 staging-apply verification (M2 live proof)
+        run: node phase0/p2/verify-staging-apply.mjs --role p2ci_worker
+      - name: P2 ledger-race proof (M4 constraint-level proof)
+        run: node phase0/p2/ci-ledger-race.mjs
+
+  p2-packaging:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the real staging image (production-only deps inside)
+        run: docker build -f phase0/p2/Dockerfile.p2staging -t p2staging:ci .
+      - name: Smoke test the worker entry chain inside the image
+        run: |
+          docker run --rm p2staging:ci node --import tsx -e "import('./phase0/p2/probe-config.ts').then(async (m) => { console.log('ts+probe-config OK', m.P2_QUEUE); await import('./phase0/p2/generations.ts'); console.log('generations OK'); await import('./phase0/p2/staging-provider.ts'); console.log('staging-provider OK'); })"
+          docker run --rm -e ROLE=worker -e P2_SYSTEM_DATABASE_URL=postgres://x/y -e P2_APPLICATION_DATABASE_URL=postgres://x/y -e P2_DRY_RUN=1 p2staging:ci node --import tsx phase0/p2/boot-worker.mjs | grep -q "NOT A STAGING WORKER"
+          docker run --rm -e ROLE=bogus p2staging:ci node phase0/p2/probe-web.mjs; test $? -eq 2

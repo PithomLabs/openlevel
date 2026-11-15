@@ -36,6 +36,7 @@ import {
   loadLedger,
   planNativeTeardown,
   snapshotPrototypeTables,
+  splitTableIdentity,
   type FkDependency,
 } from './ownership.js';
 
@@ -196,8 +197,9 @@ function quoteName(name: string): string {
   return `"${name}"`;
 }
 
-function quoteTable(name: string): string {
-  return `"public".${quoteName(name)}`;
+function quoteTable(identity: string): string {
+  const { schema, table } = splitTableIdentity(identity);
+  return `${quoteName(schema)}.${quoteName(table)}`;
 }
 
 /**
@@ -430,15 +432,19 @@ export const nativeProvisioner: Provisioner = {
       const keyedTables = await discoverKeyedTables(pool);
       // FK edges from the live catalog: DROP must go children-before-parents
       // (ledger order alone failed on p1_business_event_discrepancy →
-      // p1_business_event with "other objects depend on it").
+      // p1_business_event with "other objects depend on it"). Identities
+      // are schema-qualified to match the ledger format.
       const fkRows = await pool.query(
-        `SELECT child.relname::text AS child, parent.relname::text AS parent
+        `SELECT (child_ns.nspname || '.' || child.relname)::text AS child,
+                (parent_ns.nspname || '.' || parent.relname)::text AS parent
            FROM pg_constraint c
            JOIN pg_class child ON child.oid = c.conrelid
+           JOIN pg_namespace child_ns ON child_ns.oid = child.relnamespace
            JOIN pg_class parent ON parent.oid = c.confrelid
+           JOIN pg_namespace parent_ns ON parent_ns.oid = parent.relnamespace
           WHERE c.contype = 'f'
-            AND child.relnamespace = 'public'::regnamespace
-            AND parent.relnamespace = 'public'::regnamespace`,
+            AND child_ns.nspname IN ('public', 'app')
+            AND parent_ns.nspname IN ('public', 'app')`,
       );
       const fkDependencies = fkRows.rows as FkDependency[];
       const plan = planNativeTeardown({
