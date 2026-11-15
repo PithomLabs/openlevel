@@ -31,6 +31,23 @@ export const OWNERSHIP_DDL = `CREATE TABLE IF NOT EXISTS "public"."${OWNERSHIP_T
 /** Prototype-table name filter shared by setup snapshot + teardown. */
 export const PROTOTYPE_TABLE_PREDICATE = `(tablename LIKE 'p1\\_%' ESCAPE '\\' OR tablename LIKE 'p2\\_%' ESCAPE '\\' OR tablename LIKE 'p3\\_%' ESCAPE '\\')`;
 
+/**
+ * Schemas the ownership ledger tracks. `public` holds the local/CI P1–P3
+ * prototype tables; `app` holds V2.1 §9 proof tables (also created locally
+ * by setup-db.ts so the staging schema file is exercised every run).
+ * Table identities are `schema.table` throughout the ledger and planner.
+ */
+export const PROTOTYPE_SCHEMAS = ['public', 'app'] as const;
+
+/** Split a `schema.table` identity into charset-safe parts. Pure. */
+export function splitTableIdentity(identity: string): { schema: string; table: string } {
+  const parts = identity.split('.');
+  if (parts.length !== 2 || !/^[A-Za-z0-9_]+$/.test(parts[0] ?? '') || !/^[A-Za-z0-9_]+$/.test(parts[1] ?? '')) {
+    throw new Error(`refusing teardown: malformed table identity "${identity}"`);
+  }
+  return { schema: parts[0] as string, table: parts[1] as string };
+}
+
 export interface LedgerRow {
   execution_id: string;
   run_id: string;
@@ -151,12 +168,16 @@ export function planNativeTeardown(args: {
   return { deletes, drops, retained };
 }
 
-/** Snapshot the prototype tables existing right now (bootstrap pool). */
+/** Snapshot the prototype tables existing right now (bootstrap pool). Returns `schema.table` identities. */
 export async function snapshotPrototypeTables(pool: Pool): Promise<string[]> {
   const r = await pool.query(
-    `SELECT tablename AS t FROM pg_tables WHERE schemaname = 'public' AND ${PROTOTYPE_TABLE_PREDICATE} ORDER BY 1`,
+    `SELECT schemaname AS s, tablename AS t FROM pg_tables
+     WHERE schemaname IN ('public', 'app') AND ${PROTOTYPE_TABLE_PREDICATE} ORDER BY 1, 2`,
   );
-  return r.rows.map((row) => (row as { t: string }).t);
+  return r.rows.map((row) => {
+    const { s, t } = row as { s: string; t: string };
+    return `${s}.${t}`;
+  });
 }
 
 /** Record ownership facts for this execution (bootstrap pool). Idempotent. */
@@ -203,18 +224,18 @@ export async function loadLedger(pool: Pool, executionId: string): Promise<Ledge
   return r.rows as LedgerRow[];
 }
 
-/** Discover prototype tables carrying a run-prefixed key column (any pool). */
+/** Discover prototype tables carrying a run-prefixed key column (any pool). Returns `schema.table` identities. */
 export async function discoverKeyedTables(pool: Pool): Promise<Array<{ table: string; column: string }>> {
   const r = await pool.query(
-    `SELECT c.table_name AS table, c.column_name AS column
+    `SELECT c.table_schema AS schema, c.table_name AS table, c.column_name AS column
      FROM information_schema.columns c
      JOIN pg_tables t ON t.schemaname = c.table_schema AND t.tablename = c.table_name
-     WHERE c.table_schema = 'public' AND c.column_name = 'business_key'
+     WHERE c.table_schema IN ('public', 'app') AND c.column_name = 'business_key'
        AND ${PROTOTYPE_TABLE_PREDICATE.replaceAll('tablename', 'c.table_name')}
-     ORDER BY 1`,
+     ORDER BY 1, 2`,
   );
-  return (r.rows as Array<{ table: string; column: string }>).map((row) => ({
-    table: row.table,
+  return (r.rows as Array<{ schema: string; table: string; column: string }>).map((row) => ({
+    table: `${row.schema}.${row.table}`,
     column: row.column,
   }));
 }

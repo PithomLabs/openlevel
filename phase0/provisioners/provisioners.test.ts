@@ -8,7 +8,7 @@
  * socket attempted). Live PostgreSQL behavior is proven by Track B runs.
  */
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import {
   assertContainerIdentity,
@@ -27,7 +27,7 @@ import {
   toHbaRuleRow,
   type HbaRuleRow,
 } from './native.js';
-import { escapeLikePrefix, planNativeTeardown } from './ownership.js';
+import { escapeLikePrefix, planNativeTeardown, splitTableIdentity } from './ownership.js';
 import {
   LOOPBACK_HOST_IP,
   LoopbackPostgreSqlContainer,
@@ -72,10 +72,25 @@ describe('parseProvisioner', () => {
 });
 
 describe('unit file list', () => {
-  test('package.json test:phase0:unit covers every file the run command executes', () => {
+  test('UNIT_TEST_FILES equals the test:phase0:unit file list in both directions (F-01)', () => {
+    // The orchestrated `run` command executes UNIT_TEST_FILES while CI uses
+    // the package script; a one-directional substring check let them drift
+    // (setup-contracts.test.ts ran on CI but never on local full runs).
+    // Parse the script into real file tokens and demand set equality, no
+    // duplicates, and on-disk existence — order-insensitive.
     const pkg = JSON.parse(readFileSync('package.json', 'utf8')) as { scripts: Record<string, string> };
-    for (const file of UNIT_TEST_FILES) {
-      expect(pkg.scripts['test:phase0:unit']).toContain(file);
+    const scriptFiles = pkg.scripts['test:phase0:unit'].split(/\s+/).filter((t) => t.endsWith('.test.ts'));
+    expect(scriptFiles.length).toBeGreaterThan(0);
+    expect([...UNIT_TEST_FILES].sort()).toEqual([...scriptFiles].sort());
+  });
+
+  test('unit file lists have no duplicates and every file exists (F-01)', () => {
+    const pkg = JSON.parse(readFileSync('package.json', 'utf8')) as { scripts: Record<string, string> };
+    const scriptFiles = pkg.scripts['test:phase0:unit'].split(/\s+/).filter((t) => t.endsWith('.test.ts'));
+    expect(new Set(UNIT_TEST_FILES).size).toBe(UNIT_TEST_FILES.length);
+    expect(new Set(scriptFiles).size).toBe(scriptFiles.length);
+    for (const file of new Set([...UNIT_TEST_FILES, ...scriptFiles])) {
+      expect(existsSync(file)).toBe(true);
     }
   });
 });
@@ -363,18 +378,18 @@ describe('escapeLikePrefix', () => {
 });
 
 describe('planNativeTeardown', () => {
-  const keyed = [{ table: 'p1_business_event', column: 'business_key' }];
+  const keyed = [{ table: 'public.p1_business_event', column: 'business_key' }];
   test('created tables drop; pre-existing keyed tables get namespaced deletes + retained note', () => {
     const plan = planNativeTeardown({
       ownedRunIds: ['run-1'],
-      createdTables: ['p3_operation'],
+      createdTables: ['public.p3_operation'],
       keyedTables: keyed,
-      allPrototypeTables: ['p1_business_event', 'p3_operation'],
+      allPrototypeTables: ['public.p1_business_event', 'public.p3_operation'],
     });
-    expect(plan.drops).toEqual(['p3_operation']);
-    expect(plan.deletes).toEqual([{ table: 'p1_business_event', column: 'business_key', prefixes: ['run-1'] }]);
+    expect(plan.drops).toEqual(['public.p3_operation']);
+    expect(plan.deletes).toEqual([{ table: 'public.p1_business_event', column: 'business_key', prefixes: ['run-1'] }]);
     expect(plan.retained).toEqual([
-      { item: 'p1_business_event', reason: expect.stringContaining('only run-namespaced rows deleted') },
+      { item: 'public.p1_business_event', reason: expect.stringContaining('only run-namespaced rows deleted') },
     ]);
   });
   test('pre-existing tables without run keys are fully retained', () => {
@@ -382,32 +397,32 @@ describe('planNativeTeardown', () => {
       ownedRunIds: ['run-1'],
       createdTables: [],
       keyedTables: [],
-      allPrototypeTables: ['p3_wallet'],
+      allPrototypeTables: ['public.p3_wallet'],
     });
     expect(plan.drops).toEqual([]);
     expect(plan.deletes).toEqual([]);
     expect(plan.retained).toEqual([
-      { item: 'p3_wallet', reason: expect.stringContaining('all rows retained') },
+      { item: 'public.p3_wallet', reason: expect.stringContaining('all rows retained') },
     ]);
   });
   test('ledger entries for vanished tables are ignored, never acted on', () => {
     const plan = planNativeTeardown({
       ownedRunIds: ['run-1'],
-      createdTables: ['p9_ghost'],
+      createdTables: ['public.p9_ghost'],
       keyedTables: keyed,
-      allPrototypeTables: ['p1_business_event'],
+      allPrototypeTables: ['public.p1_business_event'],
     });
     expect(plan.drops).toEqual([]);
-    expect(plan.retained.map((r) => r.item)).not.toContain('p9_ghost');
+    expect(plan.retained.map((r) => r.item)).not.toContain('public.p9_ghost');
   });
   test('dropped tables get no deletes even when keyed', () => {
     const plan = planNativeTeardown({
       ownedRunIds: ['run-1'],
-      createdTables: ['p1_business_event'],
+      createdTables: ['public.p1_business_event'],
       keyedTables: keyed,
-      allPrototypeTables: ['p1_business_event'],
+      allPrototypeTables: ['public.p1_business_event'],
     });
-    expect(plan.drops).toEqual(['p1_business_event']);
+    expect(plan.drops).toEqual(['public.p1_business_event']);
     expect(plan.deletes).toEqual([]);
     expect(plan.retained).toEqual([]);
   });
@@ -418,30 +433,30 @@ describe('planNativeTeardown', () => {
   test('FK children drop before their parents regardless of ledger order', () => {
     const plan = planNativeTeardown({
       ownedRunIds: ['run-1'],
-      createdTables: ['p1_business_event', 'p1_business_event_discrepancy'],
+      createdTables: ['public.p1_business_event', 'public.p1_business_event_discrepancy'],
       keyedTables: keyed,
-      allPrototypeTables: ['p1_business_event', 'p1_business_event_discrepancy'],
-      fkDependencies: [{ child: 'p1_business_event_discrepancy', parent: 'p1_business_event' }],
+      allPrototypeTables: ['public.p1_business_event', 'public.p1_business_event_discrepancy'],
+      fkDependencies: [{ child: 'public.p1_business_event_discrepancy', parent: 'public.p1_business_event' }],
     });
-    expect(plan.drops).toEqual(['p1_business_event_discrepancy', 'p1_business_event']);
+    expect(plan.drops).toEqual(['public.p1_business_event_discrepancy', 'public.p1_business_event']);
     expect(plan.retained).toEqual([]);
   });
 
   test('a referencing table we do not own blocks the drop, named in retained', () => {
     const plan = planNativeTeardown({
       ownedRunIds: ['run-1'],
-      createdTables: ['p1_business_event'],
+      createdTables: ['public.p1_business_event'],
       keyedTables: keyed,
       // The blocker is not a prototype table: the FK query reads all of
       // `public`, so a non-prototype referencer must still pin the drop.
-      allPrototypeTables: ['p1_business_event'],
-      fkDependencies: [{ child: 'someone_elses_table', parent: 'p1_business_event' }],
+      allPrototypeTables: ['public.p1_business_event'],
+      fkDependencies: [{ child: 'public.someone_elses_table', parent: 'public.p1_business_event' }],
     });
     expect(plan.drops).toEqual([]);
     expect(plan.retained).toEqual([
       {
-        item: 'p1_business_event',
-        reason: expect.stringContaining('referenced by someone_elses_table'),
+        item: 'public.p1_business_event',
+        reason: expect.stringContaining('referenced by public.someone_elses_table'),
       },
     ]);
   });
@@ -451,31 +466,55 @@ describe('planNativeTeardown', () => {
     // the external reference pins the whole chain.
     const plan = planNativeTeardown({
       ownedRunIds: ['run-1'],
-      createdTables: ['p1_a', 'p1_b', 'p1_c'],
+      createdTables: ['public.p1_a', 'public.p1_b', 'public.p1_c'],
       keyedTables: [],
-      allPrototypeTables: ['p1_a', 'p1_b', 'p1_c'],
+      allPrototypeTables: ['public.p1_a', 'public.p1_b', 'public.p1_c'],
       fkDependencies: [
-        { child: 'external_table', parent: 'p1_c' },
-        { child: 'p1_c', parent: 'p1_b' },
-        { child: 'p1_b', parent: 'p1_a' },
+        { child: 'public.external_table', parent: 'public.p1_c' },
+        { child: 'public.p1_c', parent: 'public.p1_b' },
+        { child: 'public.p1_b', parent: 'public.p1_a' },
       ],
     });
     expect(plan.drops).toEqual([]);
-    expect(plan.retained.map((r) => r.item).sort()).toEqual(['p1_a', 'p1_b', 'p1_c']);
+    expect(plan.retained.map((r) => r.item).sort()).toEqual(['public.p1_a', 'public.p1_b', 'public.p1_c']);
   });
 
   test('ordering is deterministic across a longer chain and keeps unrelated order', () => {
     const plan = planNativeTeardown({
       ownedRunIds: ['run-1'],
-      createdTables: ['p3_wallet', 'p1_parent', 'p1_child', 'p3_operation'],
+      createdTables: ['public.p3_wallet', 'public.p1_parent', 'public.p1_child', 'public.p3_operation'],
       keyedTables: [],
-      allPrototypeTables: ['p3_wallet', 'p1_parent', 'p1_child', 'p3_operation'],
-      fkDependencies: [{ child: 'p1_child', parent: 'p1_parent' }],
+      allPrototypeTables: ['public.p3_wallet', 'public.p1_parent', 'public.p1_child', 'public.p3_operation'],
+      fkDependencies: [{ child: 'public.p1_child', parent: 'public.p1_parent' }],
     });
     // p1_child before p1_parent; unrelated tables keep ledger order around them.
-    expect(plan.drops.indexOf('p1_child')).toBeLessThan(plan.drops.indexOf('p1_parent'));
+    expect(plan.drops.indexOf('public.p1_child')).toBeLessThan(plan.drops.indexOf('public.p1_parent'));
     expect(plan.drops).toHaveLength(4);
-    expect([...plan.drops].sort()).toEqual(['p1_child', 'p1_parent', 'p3_operation', 'p3_wallet']);
+    expect([...plan.drops].sort()).toEqual(['public.p1_child', 'public.p1_parent', 'public.p3_operation', 'public.p3_wallet']);
+  });
+
+  test('app-schema proof tables drop by qualified identity', () => {
+    const plan = planNativeTeardown({
+      ownedRunIds: ['run-1'],
+      createdTables: ['app.p2_probe_log'],
+      keyedTables: [],
+      allPrototypeTables: ['app.p2_probe_log', 'public.p3_wallet'],
+    });
+    expect(plan.drops).toEqual(['app.p2_probe_log']);
+    expect(plan.retained.map((r) => r.item)).toEqual(['public.p3_wallet']);
+  });
+});
+
+describe('splitTableIdentity', () => {
+  test('splits schema-qualified identities', () => {
+    expect(splitTableIdentity('public.p1_business_event')).toEqual({ schema: 'public', table: 'p1_business_event' });
+    expect(splitTableIdentity('app.p2_probe_log')).toEqual({ schema: 'app', table: 'p2_probe_log' });
+  });
+
+  test('rejects malformed or unsafe identities', () => {
+    for (const bad of ['p1_business_event', 'a.b.c', '', '.x', 'x.', 'public."x;DROP"', 'app.x-y']) {
+      expect(() => splitTableIdentity(bad)).toThrow(/malformed table identity/);
+    }
   });
 });
 

@@ -1,0 +1,31 @@
+# P2 staging image (Phase 0, isolated infrastructure proof).
+#
+# Contents: node runtime + installed dependencies + phase0/ probe harness.
+# TypeScript probe modules execute via tsx, which MUST stay in
+# dependencies (phase0/p2/packaging.test.ts pins this): --omit=dev must
+# never remove the worker's module loader. Production uses tsc emit per
+# V2.1 §10; that build is out of scope for this disposable staging image.
+#
+# Secrets (P2_SYSTEM_DATABASE_URL, P2_APPLICATION_DATABASE_URL) are NEVER
+# baked in: they arrive via `fly secrets` at deploy time. ROLE and
+# P2_WORKER_ENTRY arrive via fly.toml [processes]/[env].
+FROM node:22-slim
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund
+
+COPY phase0/ ./phase0/
+
+# Fail the build if the probe entrypoints are missing (fail closed at
+# build time rather than at 3am on a worker Machine).
+RUN node --check phase0/p2/boot-worker.mjs \
+  && node --check phase0/p2/probe-web.mjs \
+  && node --check phase0/p2/setup-staging.mjs \
+  && node --check phase0/p2/enqueue-probes.mjs \
+  && node --check phase0/p2/check-recovery.mjs \
+  && test -f phase0/p2/probe-workflows.ts \
+  && test -f phase0/p2/schema.sql
+
+CMD ["node", "--import", "tsx", "phase0/p2/boot-worker.mjs"]

@@ -10,7 +10,22 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
-import { countCharges, fakeModelCall, ProviderTimeoutError, type FakeMode } from './fake-provider.js';
+import { countCharges, fakeModelCall, ProviderTimeoutError, type FakeMode, type ProviderResult } from './fake-provider.js';
+
+/**
+ * Injectable provider call (P2 staging). Same contract as fakeModelCall:
+ * accept durably, then return a result; throw ProviderTimeoutError-class
+ * for post-dispatch ambiguity (quarantined, never auto-retried), plain
+ * errors only for pre-charge rejections. dispatchAttempt defaults to
+ * fakeModelCall, so existing callers are unaffected.
+ */
+export type ProviderFn = (args: {
+  attemptId: string;
+  operationId: string;
+  inputTokens: number;
+  outputTokens: number;
+  mode: FakeMode;
+}) => Promise<ProviderResult>;
 
 export interface SpendCaps {
   budgetUsdMicro: number;
@@ -131,12 +146,18 @@ export async function dispatchAttempt(
     operationId: string;
     inputTokens: number;
     outputTokens: number;
-    mode: FakeMode;
+    mode?: FakeMode;
+    /** Staging/alt provider replacing fakeModelCall; exactly one of mode/provider is required. */
+    provider?: ProviderFn;
     caps: SpendCaps;
     /** Test-only fault injection (P3 crash tests). Never set in non-test paths. */
     hooks?: { afterDispatchingWrite?: () => Promise<void> };
   },
 ): Promise<AttemptOutcome> {
+  if ((input.mode === undefined) === (input.provider === undefined)) {
+    throw new Error('dispatchAttempt requires exactly one of mode (fake provider) or provider (injected)');
+  }
+  const mode = input.mode ?? 'ok';
   // Pre-dispatch gate in ONE transaction: lock the operation, require
   // reserved state, enforce budgets, and durably record the dispatching
   // attempt — all before any provider contact. This closes the race where
@@ -182,13 +203,14 @@ export async function dispatchAttempt(
   tx.release();
   await input.hooks?.afterDispatchingWrite?.();
   let result;
+  const provider = input.provider ?? fakeModelCall;
   try {
-    result = await fakeModelCall({
+    result = await provider({
       attemptId,
       operationId: input.operationId,
       inputTokens: input.inputTokens,
       outputTokens: input.outputTokens,
-      mode: input.mode,
+      mode,
     });
   } catch (err) {
     if (err instanceof ProviderTimeoutError) {

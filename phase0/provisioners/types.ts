@@ -47,9 +47,19 @@ export const UNIT_TEST_FILES = [
   'phase0/p1/outcome.test.ts',
   'phase0/p1/race-observer.test.ts',
   'phase0/test-env.test.ts',
+  'phase0/setup-contracts.test.ts',
   'phase0/baseline-gate.test.ts',
   'phase0/container-identity.test.ts',
   'phase0/provisioners/provisioners.test.ts',
+  'phase0/p2/boot-worker.test.ts',
+  'phase0/p2/setup-staging.test.ts',
+  'phase0/p2/staging-provider.test.ts',
+  'phase0/p2/probe-config.test.ts',
+  'phase0/p2/probe-commands.test.ts',
+  'phase0/p2/probe-web.test.ts',
+  'phase0/p2/packaging.test.ts',
+  'phase0/p2/check-fencing.test.ts',
+  'phase0/p2/check-inflight.test.ts',
 ];
 
 /** What `up` established. Persisted to the state file for `down`. */

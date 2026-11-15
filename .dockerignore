@@ -1,0 +1,8 @@
+# Staging build context hygiene (P2). Never ship dependencies, VCS state,
+# local credentials, or evidence into the image build context.
+node_modules/
+.git/
+phase0/.env
+phase0/evidence/
+*.log
+.DS_Store

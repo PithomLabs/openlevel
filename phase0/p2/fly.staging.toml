@@ -1,21 +1,48 @@
 # Staging fly.toml for the P2 fencing proof (Phase 0, isolated).
-# Reviews against: V2.1 §10, plan6.2 §3 + addendum §2.
+# Reviews against: V2.1 §10, plan6.2 §3 + addendum §2, current Fly docs
+# (verified 2026-11-15: rolling replaces one at a time; [[restart]]
+# per-process policies; [[vm]] sizing keys).
 # DBOS__VMID appears NOWHERE here — the boot wrapper sets it worker-only.
 
 app = "openlevel-p2-staging"
-primary_region = "iad"  # placeholder pending M2 region decision; record actual at Gate D
+# Disposable staging region ONLY. Production geography follows the first
+# paying customer and is decided separately — never infer it from this.
+primary_region = "iad"
 
 [build]
-  dockerfile = "Dockerfile.p2staging"  # minimal image: node + phase0 worker probe (Gate D)
+  dockerfile = "phase0/p2/Dockerfile.p2staging"
 
 [deploy]
   strategy = "rolling"
+  # Availability tuning ONLY — not executor fencing. Rolling does not
+  # cordon Machines before updating them (Fly engineering update
+  # 2026-11-05), so max_unavailable cannot prove two executors never
+  # overlap. Fencing is established by the operator stop-then-start
+  # procedure plus the app.p2_worker_generation overlap arbiter
+  # (see STAGING_ACCEPTANCE.md); V2.1's stop-then-start default stands.
   max_unavailable = 1
-  # release_command runs migrations here in Phase 2; P2 staging needs none.
+  # release_command runs migrations here in Phase 2; P2 staging needs none
+  # (setup-staging.mjs is operator-invoked, once, before first deploy).
+
+[env]
+  # Worker entrypoint path (not a secret; CWD-relative, see boot-worker).
+  P2_WORKER_ENTRY = "./phase0/p2/probe-workflows.ts"
 
 [processes]
-  web = "ROLE=web node dist/boot.js"
-  worker = "ROLE=worker node phase0/p2/boot-worker.mjs"
+  # Explicitly the probe web process — NOT the OpenLevel product app
+  # (which has no DBOS integration yet). Client-only, never an executor.
+  web = "node phase0/p2/probe-web.mjs"
+  worker = "node --import tsx phase0/p2/boot-worker.mjs"
+
+[[vm]]
+  processes = ["worker"]
+  size = "shared-cpu-1x"
+  memory = "1gb"
+
+[[vm]]
+  processes = ["web"]
+  size = "shared-cpu-1x"
+  memory = "512mb"
 
 [http_service]
   internal_port = 8790
@@ -26,17 +53,21 @@ primary_region = "iad"  # placeholder pending M2 region decision; record actual 
     interval = "15s"
     timeout = "5s"
 
-# Worker liveness is NOT web /health: heartbeat row (executor ID, queue
-# depth polled, sysdb latency, timestamp) every 30s; stale >3min pages.
-# Fly-level: worker process restart policy + scale count (see proof checklist).
+# Worker liveness is NOT web /health: the worker inserts one
+# app.p2_worker_generation row per boot and beats it every 30s; generations
+# are never overwritten so a replacement cannot conceal an overlap.
+# Stale >3min pages (procedure, not automation). Fly-level: worker process
+# restart policy + scale count (see STAGING_ACCEPTANCE.md).
 
 kill_signal = "SIGTERM"
 kill_timeout = "120s"
 
-# Worker restart policy (verified: [[restart]] is per-process-group;
-# policies always/never/on-failure; on-failure is the platform default).
+# Worker restart policy ([[restart]] is per-process-group; on-failure is
+# the platform default for deploy-created Machines, pinned here with an
+# explicit retry count).
 # on-failure: crashes restart (recovery path); clean exits, including
 # intentional deploy shutdowns, stay stopped (no restart loop).
+# NOTE: health checks do NOT restart Machines — only process exits do.
 [[restart]]
   processes = ["worker"]
   policy = "on-failure"

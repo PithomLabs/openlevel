@@ -18,7 +18,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:phase0": "node --import tsx phase0/test-env.ts run",
-    "test:phase0:unit": "vitest run --config phase0/vitest.phase0.config.ts phase0/db-guard.test.ts phase0/p1/outcome.test.ts phase0/p1/race-observer.test.ts phase0/test-env.test.ts phase0/baseline-gate.test.ts phase0/container-identity.test.ts phase0/provisioners/provisioners.test.ts",
+    "test:phase0:unit": "vitest run --config phase0/vitest.phase0.config.ts phase0/db-guard.test.ts phase0/p1/outcome.test.ts phase0/p1/race-observer.test.ts phase0/test-env.test.ts phase0/setup-contracts.test.ts phase0/baseline-gate.test.ts phase0/container-identity.test.ts phase0/provisioners/provisioners.test.ts phase0/p2/boot-worker.test.ts phase0/p2/setup-staging.test.ts phase0/p2/staging-provider.test.ts phase0/p2/probe-config.test.ts phase0/p2/probe-commands.test.ts phase0/p2/probe-web.test.ts phase0/p2/packaging.test.ts phase0/p2/check-fencing.test.ts phase0/p2/check-inflight.test.ts",
     "test:phase0:integration": "node --import tsx phase0/test-env.ts run --no-unit",
     "test:env:up": "node --import tsx phase0/test-env.ts up",
     "test:env:down": "node --import tsx phase0/test-env.ts down"
@@ -42,6 +42,7 @@
     "react-router-dom": "^7.16.0",
     "tailwind-merge": "^3.6.0",
     "tailwindcss": "^4.3.0",
+    "tsx": "^4.22.4",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -52,7 +53,6 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.2",
     "puppeteer-core": "^24.43.1",
-    "tsx": "^4.22.4",
     "typescript": "^6.0.3",
     "vite": "^8.0.16",
     "vitest": "^4.1.8",
