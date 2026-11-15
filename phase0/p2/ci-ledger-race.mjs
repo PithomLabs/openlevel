@@ -92,7 +92,7 @@ async function main() {
       seqError = err;
     }
     check('sequential-double-accept-rejected', seqError !== null && seqError.code === '23505', seqError ? `code=${seqError.code}` : 'no error (BAD)');
-    await observer.query(`DELETE FROM app.p2_provider_ledger WHERE operation_id = $1`);
+    await observer.query(`DELETE FROM app.p2_provider_ledger WHERE operation_id = $1`, [op]);
     if (process.exitCode) console.log('ledger race: FAIL');
     else console.log('ledger race: PASS (constraint arbitrated, exactly one acceptance)');
   } finally {
