@@ -34,16 +34,75 @@ const FORBIDDEN_ENV = ['PGSERVICE', 'PGSERVICEFILE', 'PGPASSFILE', 'PGOPTIONS'];
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 const ROLE_PATTERN = /^[A-Za-z_][A-Za-z0-9_$]*$/;
 
-/** Split plain DDL on semicolons. Refuses dollar-quoted bodies (functions/triggers need a real parser). Pure. */
+/**
+ * Split plain DDL into statements. Small lexical scanner (pure).
+ *
+ * Supported: `--` line comments (their semicolons never split),
+ * single-quoted string literals, and double-quoted identifiers, with SQL
+ * `''` / `""` escape handling. Splits only on semicolons outside quoted
+ * regions and comments; trims fragments and omits empties. A line comment
+ * runs to newline-or-EOF with the newline preserved, so removal cannot
+ * concatenate SQL tokens.
+ *
+ * Refused fail-closed: dollar-quoted bodies, C-style block comments,
+ * and unterminated quoted regions (functions, triggers, and block
+ * comments need a real parser). None occurs in the consumed P2 schema
+ * file (pinned by unit test).
+ */
 export function splitSqlStatements(sql) {
   if (sql.includes('$$')) {
     throw new Error('refusing to apply: schema contains dollar-quoted body (needs a real statement parser)');
   }
   const out = [];
-  for (const chunk of sql.split(';')) {
-    const stmt = chunk.replace(/--[^\n]*/g, '').trim();
-    if (stmt.length > 0) out.push(stmt);
+  let current = '';
+  let quote = null; // "'" or '"' while inside a quoted region
+  let i = 0;
+  while (i < sql.length) {
+    const ch = sql[i];
+    const next = sql[i + 1];
+    if (quote !== null) {
+      current += ch;
+      if (ch === quote) {
+        if (next === quote) {
+          current += next; // '' / "" escape: stays inside the region
+          i += 2;
+          continue;
+        }
+        quote = null;
+      }
+      i++;
+      continue;
+    }
+    if (ch === '-' && next === '-') {
+      // Line comment: skip to (not including) the newline; keeping the
+      // newline preserves token separation across the removed comment.
+      while (i < sql.length && sql[i] !== '\n') i++;
+      continue;
+    }
+    if (ch === '/' && next === '*') {
+      throw new Error('refusing to apply: schema contains block comment (needs a real statement parser)');
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      current += ch;
+      i++;
+      continue;
+    }
+    if (ch === ';') {
+      const stmt = current.trim();
+      if (stmt.length > 0) out.push(stmt);
+      current = '';
+      i++;
+      continue;
+    }
+    current += ch;
+    i++;
   }
+  if (quote !== null) {
+    throw new Error('refusing to apply: schema contains unterminated quoted region');
+  }
+  const tail = current.trim();
+  if (tail.length > 0) out.push(tail);
   return out;
 }
 

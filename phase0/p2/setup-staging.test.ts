@@ -70,6 +70,53 @@ describe('splitSqlStatements', () => {
       expect(s).not.toMatch(/DROP|TRUNCATE|DELETE FROM/i);
     }
   });
+
+  test('semicolons inside line comments never become fragments (prompt26)', () => {
+    expect(splitSqlStatements('-- a; b; c\nCREATE TABLE a (x int);')).toEqual(['CREATE TABLE a (x int)']);
+    expect(splitSqlStatements('-- only a comment; with semicolons;\n')).toEqual([]);
+    expect(splitSqlStatements('-- trailing comment without newline;')).toEqual([]);
+  });
+
+  test('inline comments with semicolons are stripped from their statement (prompt26)', () => {
+    expect(splitSqlStatements('CREATE TABLE a (x int); -- trailing; comment\nCREATE TABLE b (y int);')).toEqual([
+      'CREATE TABLE a (x int)',
+      'CREATE TABLE b (y int)',
+    ]);
+  });
+
+  test('semicolons inside quoted regions do not split (prompt26)', () => {
+    expect(splitSqlStatements(`CREATE TABLE a (x text DEFAULT 'a;b');`)).toEqual([
+      `CREATE TABLE a (x text DEFAULT 'a;b')`,
+    ]);
+    expect(splitSqlStatements('CREATE TABLE "we;ird" (x int);')).toEqual(['CREATE TABLE "we;ird" (x int)']);
+  });
+
+  test('escaped quotes do not end quoted regions early (prompt26)', () => {
+    expect(splitSqlStatements(`INSERT INTO a VALUES ('it''s; fine');`)).toEqual([
+      `INSERT INTO a VALUES ('it''s; fine')`,
+    ]);
+    expect(splitSqlStatements('CREATE TABLE "a""b;c" (x int);')).toEqual(['CREATE TABLE "a""b;c" (x int)']);
+    // A quote char inside a line comment is inert, not a region opener.
+    expect(splitSqlStatements(`-- don't split;\nCREATE TABLE a (x int);`)).toEqual(['CREATE TABLE a (x int)']);
+  });
+
+  test('the real p2 schema emits only CREATE statements, never comment text (prompt26)', () => {
+    const stmts = splitSqlStatements(readFileSync('phase0/p2/schema.sql', 'utf8'));
+    expect(stmts).toHaveLength(7);
+    for (const s of stmts) {
+      expect(s.startsWith('CREATE')).toBe(true);
+      expect(s).not.toContain('--');
+    }
+    expect(stmts.join('\n')).not.toContain('safe to re-apply');
+  });
+
+  test('unsupported constructs fail closed: block comments and unterminated quotes (prompt26)', () => {
+    expect(() => splitSqlStatements('CREATE TABLE a (x int); /* block; comment */')).toThrow(/block comment/);
+    // The same markers inside strings or line comments are inert, not refusals.
+    expect(splitSqlStatements(`SELECT '/* not a comment */';`)).toEqual([`SELECT '/* not a comment */'`]);
+    expect(splitSqlStatements('-- /* not a comment */\nSELECT 1;')).toEqual(['SELECT 1']);
+    expect(() => splitSqlStatements(`SELECT 'unterminated;`)).toThrow(/unterminated/);
+  });
 });
 
 describe('stagingGrants', () => {
