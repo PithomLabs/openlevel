@@ -128,11 +128,18 @@ export async function handleEvent(deps: P1Deps, event: AuthenticatedEvent): Prom
   try {
     tx = await connectBounded(deps.pool, deps.acquireTimeoutMs);
     await tx.query('BEGIN');
+    // Bare ON CONFLICT DO NOTHING (no column arbiter): the table carries TWO
+    // unique constraints (business_key PK + workflow_id UNIQUE), and an
+    // arbiter tames only one — under concurrency losers then die on
+    // p1_business_event_workflow_id_key instead of taking the duplicate path
+    // (CI run 43824411092). Omitted target handles all usable constraints,
+    // and every conflict is same-key by construction: workflow_id is a
+    // deterministic function of business_key. Do not re-add an arbiter here.
     const inserted = await tx.query(
       `INSERT INTO p1_business_event
          (business_key, agency_id, location_id, payload_hash, workflow_id, last_status, expires_at)
        VALUES ($1, $2, $3, $4, $5, 'accepted', now() + make_interval(secs => $6))
-       ON CONFLICT (business_key) DO NOTHING
+       ON CONFLICT DO NOTHING
        RETURNING business_key, workflow_id, payload_hash, last_status, last_result, generation, accepted_at, false AS is_expired`,
       [key, event.agencyId, event.locationId, hash, workflowIdFor(key), event.idempotencyTtlMs / 1000],
     );
