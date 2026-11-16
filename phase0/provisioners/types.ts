@@ -46,6 +46,7 @@ export const UNIT_TEST_FILES = [
   'phase0/db-guard.test.ts',
   'phase0/p1/outcome.test.ts',
   'phase0/p1/race-observer.test.ts',
+  'phase0/p1/handler-sql.test.ts',
   'phase0/test-env.test.ts',
   'phase0/setup-contracts.test.ts',
   'phase0/baseline-gate.test.ts',

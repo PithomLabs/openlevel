@@ -141,6 +141,11 @@ describe('P1 atomic enqueue (requires P1_DATABASE_URL + pinned SDK)', () => {
     // P1 insert (pg_blocking_pids), never the contenders' own pool. The
     // old same-pool 25ms sampler missed short windows and swallowed its
     // own errors (CI run 43688018842: maxActive 0) — it is gone.
+    // Regression status (prompt34): this test reproduces the exact CI
+    // failure of run 43824411092 — losers dying on
+    // p1_business_event_workflow_id_key (23505) instead of taking the
+    // duplicate path. It must stay timing-honest: 8 racers, held winner,
+    // observer-verified blocking, 1 accepted + 7 duplicates.
     const contenderPool = new Pool({ connectionString: DATABASE_URL, max: 5, application_name: 'p1-race-contender' });
     const observerPool = new Pool({ connectionString: DATABASE_URL, max: 1, application_name: 'p1-race-observer' });
     try {

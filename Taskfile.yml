@@ -1,0 +1,421 @@
+# OpenLevel developer Taskfile (Prompt 29.2, spec Part II section 4).
+# Single command interface for macOS + Linux (x64/arm64). Discover: task --list.
+# Diagnose: task doctor. Start the app: task dev.
+#
+# Portability rules baked in: task-level `platforms` gates for OS-touching
+# tasks, POSIX-only inline shell, Node helpers for everything nontrivial.
+# There is deliberately NO dotenv stanza: this file never loads .env, and no
+# task prints secrets, URLs, passwords, or tokens.
+version: '3'
+
+vars:
+  API_PORT: 8790
+  WEB_PORT: 5273
+  LOOPBACK: 127.0.0.1
+  CONFIRM_TOOL_INSTALL: ''
+  CONFIRM_TOOL_UPGRADE: ''
+  FLY_APP: ''
+  FLY_CONFIG: ''
+  CONFIRM_DEPLOY: ''
+  PROJECT_ID: ''
+
+tasks:
+  default:
+    desc: Show help (same as `task help`)
+    cmds:
+      - task: help
+    silent: true
+
+  help:
+    desc: Show the namespaced task catalog and first-run pointers
+    cmds:
+      - "echo 'OpenLevel commands — full catalog below. Start with: task doctor'"
+      - "task --list"
+    silent: true
+
+  platform:check:
+    desc: Fail fast with a clear message on unsupported operating systems
+    cmds:
+      - "node scripts/toolchain.mjs gate"
+    silent: true
+
+  doctor:
+    desc: Read-only workstation diagnosis (required vs optional tools, ports)
+    cmds:
+      - "node scripts/toolchain.mjs doctor"
+    silent: true
+
+  tools:detect:
+    desc: Print the detected host facts (OS, arch, libc, package managers)
+    cmds:
+      - "node scripts/toolchain.mjs detect"
+    silent: true
+
+  tools:plan:
+    desc: Print the compatible-version install plan for this host (modifies nothing)
+    cmds:
+      - "node scripts/toolchain.mjs plan"
+    silent: true
+
+  tools:install:
+    desc: Apply safe per-user install steps (needs CONFIRM_TOOL_INSTALL=yes; admin steps pause for the owner)
+    preconditions:
+      - sh: test "$CONFIRM_TOOL_INSTALL" = "yes"
+        msg: "Refusing: re-run as `task tools:install CONFIRM_TOOL_INSTALL=yes` (preview with `task tools:plan`)"
+    env:
+      CONFIRM_TOOL_INSTALL: "{{.CONFIRM_TOOL_INSTALL}}"
+    cmds:
+      - "node scripts/toolchain.mjs install"
+    silent: true
+
+  tools:upgrade:
+    desc: Preview pending tool upgrades (apply with CONFIRM_TOOL_UPGRADE=yes; Node majors never auto-applied)
+    env:
+      CONFIRM_TOOL_UPGRADE: "{{.CONFIRM_TOOL_UPGRADE}}"
+    cmds:
+      - "node scripts/toolchain.mjs upgrade"
+    silent: true
+
+  tools:versions:
+    desc: Print installed tool versions (MISSING where absent)
+    cmds:
+      - "node scripts/toolchain.mjs versions"
+    silent: true
+
+  deps:install:
+    desc: Reproducible dependency install (same command CI uses)
+    cmds:
+      - "npm ci --no-audit --no-fund"
+    silent: true
+
+  deps:audit:
+    desc: Audit installed dependencies for known vulnerabilities
+    cmds:
+      - "npm audit"
+    silent: true
+
+  dev:
+    desc: Start the full local app (PGlite API + Vite UI), open the browser; Ctrl+C stops both
+    platforms: [darwin, linux]
+    deps:
+      - task: platform:check
+    preconditions:
+      - sh: test -d node_modules
+        msg: "node_modules is missing — run `task deps:install` first"
+    env:
+      OPENLEVEL_HOST: "{{.LOOPBACK}}"
+      OPENLEVEL_API_PORT: "{{.API_PORT}}"
+      OPENLEVEL_WEB_PORT: "{{.WEB_PORT}}"
+    cmds:
+      - "node scripts/dev.mjs"
+    silent: true
+
+  dev:api:
+    desc: Start only the local PGlite API backend on :8790 (loopback)
+    platforms: [darwin, linux]
+    deps:
+      - task: platform:check
+    env:
+      OPENLEVEL_HOST: "{{.LOOPBACK}}"
+      OPENLEVEL_API_PORT: "{{.API_PORT}}"
+      OPENLEVEL_WEB_PORT: "{{.WEB_PORT}}"
+    cmds:
+      - "npm run dev:local"
+    silent: true
+
+  dev:web:
+    desc: Start only the Vite frontend on :5273 (loopback, strict port)
+    platforms: [darwin, linux]
+    deps:
+      - task: platform:check
+    env:
+      OPENLEVEL_HOST: "{{.LOOPBACK}}"
+      OPENLEVEL_API_PORT: "{{.API_PORT}}"
+      OPENLEVEL_WEB_PORT: "{{.WEB_PORT}}"
+    cmds:
+      - "npm run dev"
+    silent: true
+
+  dev:health:
+    desc: Probe backend /health and frontend readiness (exit nonzero when either is down)
+    platforms: [darwin, linux]
+    deps:
+      - task: platform:check
+    env:
+      OPENLEVEL_HOST: "{{.LOOPBACK}}"
+      OPENLEVEL_API_PORT: "{{.API_PORT}}"
+      OPENLEVEL_WEB_PORT: "{{.WEB_PORT}}"
+    cmds:
+      - "node scripts/dev.mjs health"
+    silent: true
+
+  dev:open:
+    desc: Open the local UI in the default browser
+    platforms: [darwin, linux]
+    deps:
+      - task: platform:check
+    env:
+      OPENLEVEL_HOST: "{{.LOOPBACK}}"
+      OPENLEVEL_API_PORT: "{{.API_PORT}}"
+      OPENLEVEL_WEB_PORT: "{{.WEB_PORT}}"
+    cmds:
+      - "node scripts/dev.mjs open"
+    silent: true
+
+  db:version:
+    desc: Print the local PostgreSQL server/client version
+    platforms: [darwin, linux]
+    deps:
+      - task: platform:check
+    cmds:
+      - "node scripts/db-service.mjs version"
+    silent: true
+
+  db:status:
+    desc: Show local PostgreSQL service status (read-only)
+    platforms: [darwin, linux]
+    deps:
+      - task: platform:check
+    cmds:
+      - "node scripts/db-service.mjs status"
+    silent: true
+
+  db:start:
+    desc: Start the local PostgreSQL service (sudo-gated providers pause with the exact owner command)
+    platforms: [darwin, linux]
+    deps:
+      - task: platform:check
+    cmds:
+      - "node scripts/db-service.mjs start"
+    silent: true
+
+  db:stop:
+    desc: Stop the local PostgreSQL service (sudo-gated providers pause with the exact owner command)
+    platforms: [darwin, linux]
+    deps:
+      - task: platform:check
+    cmds:
+      - "node scripts/db-service.mjs stop"
+    silent: true
+
+  db:create:
+    desc: Create the local role + database when missing (never overwrites; needs DATABASE_URL set)
+    platforms: [darwin, linux]
+    deps:
+      - task: platform:check
+    cmds:
+      - "node scripts/db-service.mjs create"
+    silent: true
+
+  db:migrate:
+    desc: Migrate the guarded LOCAL database via db/migrate.ts (needs DATABASE_URL set)
+    platforms: [darwin, linux]
+    deps:
+      - task: platform:check
+    cmds:
+      - "node scripts/db-service.mjs guard"
+      - "npm run migrate"
+    silent: true
+
+  db:seed:
+    desc: Seed the guarded LOCAL database via db/seed.ts (needs DATABASE_URL set)
+    platforms: [darwin, linux]
+    deps:
+      - task: platform:check
+    cmds:
+      - "node scripts/db-service.mjs guard"
+      - "npm run seed"
+    silent: true
+
+  db:psql:
+    desc: Open psql on the guarded LOCAL database (never prints the URL)
+    platforms: [darwin, linux]
+    deps:
+      - task: platform:check
+    cmds:
+      - "node scripts/db-service.mjs psql"
+    silent: true
+
+  test:
+    desc: Run the full application test suite (vitest)
+    cmds:
+      - "npm test"
+    silent: true
+
+  test:unit:
+    desc: Run the unit suite (same runner as `task test`)
+    cmds:
+      - "npm test"
+    silent: true
+
+  test:phase0:
+    desc: Run the orchestrated Phase 0 suite (unit + integration via test-env)
+    cmds:
+      - "npm run test:phase0"
+    silent: true
+
+  test:phase0:unit:
+    desc: Run the DB-free Phase 0 unit contract suite
+    cmds:
+      - "npm run test:phase0:unit"
+    silent: true
+
+  test:phase0:integration:
+    desc: Run the Phase 0 integration suite (needs Docker/Testcontainers; honest NOT RUN without it)
+    cmds:
+      - "npm run test:phase0:integration"
+    silent: true
+
+  typecheck:
+    desc: Root typecheck (same command CI uses)
+    cmds:
+      - "npm run typecheck"
+    silent: true
+
+  typecheck:phase0:
+    desc: Phase 0 typecheck (same command CI uses)
+    cmds:
+      - "npx tsc -p phase0/tsconfig.json --noEmit"
+    silent: true
+
+  typecheck:scripts:
+    desc: Dev-tooling typecheck (scripts + vite.config.ts; not CI-gated)
+    cmds:
+      - "npx tsc -p tsconfig.scripts.json --noEmit"
+    silent: true
+
+  build:
+    desc: Build the application (same command CI uses)
+    cmds:
+      - "npm run build"
+    silent: true
+
+  check:
+    desc: Local-first aggregate — unit tests, both typechecks, then build (in order)
+    cmds:
+      - task: test
+      - task: typecheck
+      - task: typecheck:phase0
+      - task: build
+    silent: true
+
+  fly:version:
+    desc: Print the installed Fly CLI version
+    cmds:
+      - "fly version"
+    silent: true
+
+  fly:help:
+    desc: Print Fly CLI help
+    cmds:
+      - "fly help"
+    silent: true
+
+  fly:apps:
+    desc: List Fly applications (read-only)
+    cmds:
+      - "fly apps list"
+    silent: true
+
+  fly:status:
+    desc: Show one Fly app's status (read-only; needs FLY_APP=<name>)
+    preconditions:
+      - sh: test -n "$FLY_APP"
+        msg: "FLY_APP is required: task fly:status FLY_APP=<app-name>"
+    env:
+      FLY_APP: "{{.FLY_APP}}"
+    cmds:
+      - 'fly status -a "$FLY_APP"'
+    silent: true
+
+  fly:logs:
+    desc: Tail one Fly app's logs (read-only; needs FLY_APP=<name>)
+    preconditions:
+      - sh: test -n "$FLY_APP"
+        msg: "FLY_APP is required: task fly:logs FLY_APP=<app-name>"
+    env:
+      FLY_APP: "{{.FLY_APP}}"
+    cmds:
+      - 'fly logs -a "$FLY_APP"'
+    silent: true
+
+  fly:releases:
+    desc: List one Fly app's releases (read-only; needs FLY_APP=<name>)
+    preconditions:
+      - sh: test -n "$FLY_APP"
+        msg: "FLY_APP is required: task fly:releases FLY_APP=<app-name>"
+    env:
+      FLY_APP: "{{.FLY_APP}}"
+    cmds:
+      - 'fly releases -a "$FLY_APP"'
+    silent: true
+
+  fly:open:
+    desc: Open one Fly app in the browser (needs FLY_APP=<name>)
+    preconditions:
+      - sh: test -n "$FLY_APP"
+        msg: "FLY_APP is required: task fly:open FLY_APP=<app-name>"
+    env:
+      FLY_APP: "{{.FLY_APP}}"
+    cmds:
+      - 'fly open -a "$FLY_APP"'
+    silent: true
+
+  fly:deploy:
+    desc: FUTURE USE ONLY — guarded deploy (needs FLY_APP, FLY_CONFIG, CONFIRM_DEPLOY=yes; never the P2 config)
+    env:
+      FLY_APP: "{{.FLY_APP}}"
+      FLY_CONFIG: "{{.FLY_CONFIG}}"
+      CONFIRM_DEPLOY: "{{.CONFIRM_DEPLOY}}"
+    cmds:
+      - "node scripts/toolchain.mjs fly-guard"
+      - "fly deploy -a \"$FLY_APP\" -c \"$FLY_CONFIG\""
+    silent: true
+
+  neon:version:
+    desc: Print the installed Neon CLI version
+    cmds:
+      - "neon --version"
+    silent: true
+
+  neon:help:
+    desc: Print Neon CLI help
+    cmds:
+      - "neon --help"
+    silent: true
+
+  neon:projects:
+    desc: List Neon projects (read-only; SKIPPED when owner auth is missing)
+    cmds:
+      - "node scripts/toolchain.mjs neon projects"
+    silent: true
+
+  neon:branches:
+    desc: List one Neon project's branches (read-only; needs PROJECT_ID=<id>)
+    preconditions:
+      - sh: test -n "$PROJECT_ID"
+        msg: "PROJECT_ID is required: task neon:branches PROJECT_ID=<project-id>"
+    env:
+      PROJECT_ID: "{{.PROJECT_ID}}"
+    cmds:
+      - "node scripts/toolchain.mjs neon branches"
+    silent: true
+
+  neon:diff:
+    desc: Show a Neon branch diff view (read-only; needs PROJECT_ID=<id>)
+    preconditions:
+      - sh: test -n "$PROJECT_ID"
+        msg: "PROJECT_ID is required: task neon:diff PROJECT_ID=<project-id>"
+    env:
+      PROJECT_ID: "{{.PROJECT_ID}}"
+    cmds:
+      - "node scripts/toolchain.mjs neon diff"
+    silent: true
+
+  neon:inspect:
+    desc: Read-only Neon overview (add PROJECT_ID=<id> to include branches)
+    env:
+      PROJECT_ID: "{{.PROJECT_ID}}"
+    cmds:
+      - "node scripts/toolchain.mjs neon inspect"
+    silent: true

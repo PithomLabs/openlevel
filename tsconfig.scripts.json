@@ -1,0 +1,19 @@
+{
+  // Dedicated gate for the dev-tooling scripts and Vite config (Prompt 33 P3-N1).
+  // The root tsconfig covers only src/server/db; this file covers the rest
+  // without touching the existing configuration or CI gates. Strict, but
+  // deliberately without noUncheckedIndexedAccess (test/glue scope).
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "types": ["vitest/globals", "node"],
+    "lib": ["ES2023"],
+    "noEmit": true
+  },
+  "include": ["scripts", "vite.config.ts"]
+}
