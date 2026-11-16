@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { serve } from '@hono/node-server'
 import { PGlite } from '@electric-sql/pglite'
+import { resolveDevConfig } from '../scripts/lib/dev-env.mjs'
 import { seedDatabase } from '../db/seed'
 import { PgliteDatabase } from './db/pglite-database'
 import { createApp } from './index'
@@ -73,6 +74,15 @@ async function prerunWelcomeWorkflow(db: PgliteDatabase): Promise<void> {
 }
 
 async function main() {
+  // Bind comes from the shared validated dev config (Prompt 31): loopback-only
+  // by default, ports/host overridable via OPENLEVEL_*. Fail before booting.
+  let devConfig
+  try {
+    devConfig = resolveDevConfig(process.env)
+  } catch (err) {
+    console.error(`openlevel DEV api: ${err instanceof Error ? err.message : String(err)}`)
+    process.exit(2)
+  }
   const pg = new PGlite() // in-memory; fresh on every boot
   await pg.exec(SCHEMA)
   const db = new PgliteDatabase(pg)
@@ -98,9 +108,8 @@ async function main() {
     },
   })
 
-  const port = 8790
-  serve({ fetch: app.fetch, port })
-  console.log(`openlevel DEV api (pglite, in-memory) listening on :${port}`)
+  serve({ fetch: app.fetch, port: devConfig.apiPort, hostname: devConfig.host })
+  console.log(`openlevel DEV api (pglite, in-memory) listening on ${devConfig.host}:${devConfig.apiPort}`)
   console.log('login: admin@acmecorp.com / openlevel')
 }
 
