@@ -46,7 +46,7 @@ async function setup() {
   await new WorkflowActionsRepo(db, loc).replaceAll(wf.id, [{ type: 'add_tag', config: { tag: 'welcomed' } }])
 
   const dispatch = async (e: Parameters<typeof dispatchWorkflowEvent>[1]) => {
-    await dispatchWorkflowEvent({ db }, e)
+    await dispatchWorkflowEvent({ db, waitsEnabled: true }, e)
   }
   const app = new Hono<AppEnv>()
   app.route('/', publicFormsRoute({ db, dispatch }))
@@ -129,6 +129,101 @@ test('POST submit captures a lead, STORES the submission, tags it, bumps the cou
     body.contactId,
   ])
   expect(timeline.some((t) => t.type === 'form_submission')).toBe(true)
+})
+
+test('R14-01: keyless identical submits stay DISTINCT; only an explicit key replays', async () => {
+  const { app, db } = await setup()
+  const submit = (headers: Record<string, string> = {}) =>
+    app.request('/loc_test/cash-offer/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify({
+        values: { full_name: 'Olivia Reed', email: 'olivia@example.com', phone: '+15125550148' },
+      }),
+    })
+
+  const first = await submit()
+  expect(first.status).toBe(200)
+  expect(await first.json()).not.toHaveProperty('deduped')
+  // Same values, no header: a SECOND logical submission, never a replay —
+  // payload equality must not collapse two intentional submits (R14-01).
+  const second = await submit()
+  expect(second.status).toBe(200)
+  const secondBody = (await second.json()) as { contactId: string }
+  expect(secondBody).not.toHaveProperty('deduped')
+  // Same contact (identity upsert), but two stored submissions.
+  const submissions = await db.query<{ n: number }>(
+    "SELECT count(*)::int AS n FROM timeline_events WHERE type = 'form_submission'",
+  )
+  expect(submissions[0]?.n).toBe(2)
+
+  // An explicit key DOES replay: one more execution, then a deduped replay.
+  const third = await submit({ 'Idempotency-Key': 'form-retry-1' })
+  expect(third.status).toBe(200)
+  expect(await third.json()).not.toHaveProperty('deduped')
+  const fourth = await submit({ 'Idempotency-Key': 'form-retry-1' })
+  expect(fourth.status).toBe(200)
+  expect(await fourth.json()).toMatchObject({ deduped: true })
+  const after = await db.query<{ n: number }>(
+    "SELECT count(*)::int AS n FROM timeline_events WHERE type = 'form_submission'",
+  )
+  expect(after[0]?.n).toBe(3)
+  // Same contact throughout: the welcome automation ran exactly once.
+  const runs = await db.query<{ n: number }>(
+    "SELECT count(*)::int AS n FROM workflow_runs WHERE trigger_type = 'contact_created'",
+  )
+  expect(runs[0]?.n).toBe(1)
+})
+
+test('R14-01: same key + different payload is a 409 conflict, never silent reuse', async () => {
+  const { app } = await setup()
+  const submit = (name: string, headers: Record<string, string> = {}) =>
+    app.request('/loc_test/cash-offer/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify({
+        values: { full_name: name, email: 'olivia@example.com', phone: '+15125550148' },
+      }),
+    })
+  expect((await submit('Olivia Reed', { 'Idempotency-Key': 'form-clash-1' })).status).toBe(200)
+  const clash = await submit('Olivia R.', { 'Idempotency-Key': 'form-clash-1' })
+  expect(clash.status).toBe(409)
+})
+
+test('R14-01: malformed Idempotency-Key is a 400, not a silent new submission', async () => {
+  const { app } = await setup()
+  const submit = (key: string) =>
+    app.request('/loc_test/cash-offer/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key },
+      body: JSON.stringify({
+        values: { full_name: 'Olivia Reed', email: 'olivia@example.com', phone: '+15125550148' },
+      }),
+    })
+  expect((await submit('x'.repeat(129))).status).toBe(400)
+})
+
+test('distinct values stay distinct submissions even for a known contact (§12)', async () => {
+  const { app, db } = await setup()
+  const submit = (name: string) =>
+    app.request('/loc_test/cash-offer/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        values: { full_name: name, email: 'olivia@example.com', phone: '+15125550148' },
+      }),
+    })
+
+  expect((await submit('Olivia Reed')).status).toBe(200)
+  // Same identity (same contact, no R13-12 conflict) but different values:
+  // a second logical submission, not a replay of the first.
+  expect((await submit('Olivia R.')).status).toBe(200)
+  const submissions = await db.query<{ n: number }>(
+    "SELECT count(*)::int AS n FROM timeline_events WHERE type = 'form_submission'",
+  )
+  expect(submissions[0]?.n).toBe(2)
+  const contacts = await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM contacts WHERE location_id = 'loc_test'`)
+  expect(contacts[0]?.n).toBe(1)
 })
 
 test('POST submit rejects a missing required field (400)', async () => {

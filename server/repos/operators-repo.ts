@@ -49,6 +49,16 @@ export class OperatorsRepo {
     return rows.length > 0
   }
 
+  /**
+   * The operator's authorization role, or null when the operator does not
+   * exist. Narrow by design: authorization needs the role, never the
+   * password hash (FIND-08).
+   */
+  async getRole(operatorId: string): Promise<string | null> {
+    const rows = await this.db.query<{ role: string }>('SELECT role FROM operators WHERE id=$1', [operatorId])
+    return rows[0]?.role ?? null
+  }
+
   listLocations(operatorId: string): Promise<Location[]> {
     return this.db.query<Location>(
       `SELECT l.id, l.name, l.slug, l.client_slug, l.branding, l.settings

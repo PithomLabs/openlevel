@@ -1,5 +1,12 @@
 # OpenLevel → TypeScript + DBOS + Fly.io + Neon: Implementation Plan
 
+> SUPERSEDED 2026-11-19: historical point-in-time record. Governing
+> architecture is `OPENLEVEL_DBOS_FLY_NEON_ARCHITECTURE_V2_1.md`; staging
+> operations are in `docs/deployment/FLY_NEON.md`. Do not follow the
+> `?secret=` fallback or DBOS sequencing described below — the remediation
+> removed secret-in-query (Chatwoot native HMAC) and pg-boss remains the
+> engine.
+
 - **Deliverable for:** `docs/plans/prompt3.md`, as corrected by the final consolidated
   directive in `docs/plans/plan5.md` (§§1–27, controlling on conflict).
 - **Checkout:** branch `master`, commit `2634f8c` (full SHA

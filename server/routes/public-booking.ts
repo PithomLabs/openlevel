@@ -8,10 +8,17 @@ import { bookableDates, parseYmd, slotsForDate, zonedYmd } from '../lib/availabi
 import { calendarBusyFor, toConfig } from '../lib/booking-availability'
 import { renderBookingNotFound, renderBookingPage } from '../lib/booking-page'
 import { isUniqueViolation } from '../lib/db-errors'
+import {
+  IdempotencyConflict,
+  IdempotencyInProgress,
+  completeIdempotencyKey,
+  withIdempotency,
+} from '../lib/idempotency'
 import { AppointmentsRepo } from '../repos/appointments-repo'
 import { type Calendar, CalendarsRepo } from '../repos/calendars-repo'
 import { ContactsRepo } from '../repos/contacts-repo'
 import { LocationsRepo } from '../repos/locations-repo'
+import { OutboxRepo } from '../repos/outbox-repo'
 import { TimelineRepo } from '../repos/timeline-repo'
 
 const bookSchema = z.object({
@@ -37,6 +44,14 @@ const bookSchema = z.object({
  * appointments, notice window, or buffer have since closed. Booking dispatches
  * `appointment_booked`, closing the capture → automation loop.
  */
+/** Lost the appointment write race: maps to an honest 409 after rollback. */
+export class SlotTaken extends Error {
+  constructor() {
+    super('slot taken')
+    this.name = 'SlotTaken'
+  }
+}
+
 export function publicBookingRoute(deps: {
   db: Database
   /** Fired after a booking so live `appointment_booked` workflows enroll the lead. */
@@ -93,9 +108,14 @@ export function publicBookingRoute(deps: {
     return c.json({ slots: slotsForDate(config, date, busy, clock()) })
   })
 
-  // Reserve a slot. Recomputes the offered slots RIGHT NOW and rejects a start
-  // that is no longer free (someone booked it, or notice has passed) — the
-  // double-book guard. Then upserts the contact and creates the appointment.
+  // Reserve a slot (FIND-09: atomic + idempotent). The calendar lookup runs
+  // first (404s never touch idempotency state); then one idempotent unit
+  // rechecks the slot snapshot, commits contact + appointment + timeline +
+  // outbox row together, and the fast-path dispatch fires after commit using
+  // the outbox row's stable id — so the sweeper's redelivery converges on
+  // the same event_id instead of doubling. The snapshot lives INSIDE the
+  // idempotent unit deliberately: a retry-after-success must replay the
+  // recorded booking, not bounce off its own held slot with a 409.
   app.post('/:loc/:slug/book', zValidator('json', bookSchema), async (c) => {
     const loc = c.req.param('loc')
     const slug = c.req.param('slug')
@@ -103,48 +123,96 @@ export function publicBookingRoute(deps: {
     const cal = await enabledCalendar(loc, slug)
     if (!cal) return c.json({ error: 'not found' }, 404)
 
-    const config = toConfig(cal)
-    const ymd = zonedYmd(new Date(input.start), config.timezone)
-    const busy = await calendarBusyFor(deps.db, loc, cal, ymd)
-    const match = slotsForDate(config, ymd, busy, clock()).find((s) => s.start === input.start)
-    if (!match) return c.json({ error: 'slot taken' }, 409)
-
-    const phone = input.phone?.trim() || undefined
-    const contact = await new ContactsRepo(deps.db, loc).upsertByMatch(
-      { name: input.name, email: input.email, phone },
-      `booking:${slug}`,
-    )
-    const apptRepo = new AppointmentsRepo(deps.db, loc)
-    let appointment: Awaited<ReturnType<typeof apptRepo.create>>
+    // Idempotency key: explicit header wins; otherwise a stable content key
+    // (same visitor retrying the same slot replays instead of double-booking).
+    // Keyed on the client-provided start: match.start always equals input.start
+    // on every non-409 path, so this is identical to keying on the snapshot.
+    // created is intentionally ignored inside: a booking always fires
+    // appointment_booked (the journey event), never contact_created — firing
+    // both would double-trigger automations for direct bookers.
+    const email = input.email.trim().toLowerCase()
+    const key = c.req.header('Idempotency-Key') ?? `booking:${slug}:${input.start}:${email}`
+    const scope = {
+      locationId: loc,
+      operation: 'booking-create',
+      key,
+      payload: { slug, start: input.start, email },
+    }
     try {
-      appointment = await apptRepo.create({
-        calendarId: cal.id,
-        title: `${cal.name} — ${input.name}`,
-        startsAt: match.start,
-        endsAt: match.end,
-        contactId: contact.id,
-        notes: input.notes?.trim() || null,
-      })
+      const { result, reused } = await withIdempotency(
+        deps.db,
+        scope,
+        () =>
+          deps.db.withTransaction(async (tx) => {
+            const config = toConfig(cal)
+            const ymd = zonedYmd(new Date(input.start), config.timezone)
+            const busy = await calendarBusyFor(tx, loc, cal, ymd)
+            const match = slotsForDate(config, ymd, busy, clock()).find((s) => s.start === input.start)
+            if (!match) throw new SlotTaken()
+            const phone = input.phone?.trim() || undefined
+            const { contact } = await new ContactsRepo(tx, loc).upsertByMatch(
+              { name: input.name, email: input.email, phone },
+              `booking:${slug}`,
+            )
+            let appointment: Awaited<ReturnType<AppointmentsRepo['create']>>
+            try {
+              appointment = await new AppointmentsRepo(tx, loc).create({
+                calendarId: cal.id,
+                title: `${cal.name} — ${input.name}`,
+                startsAt: match.start,
+                endsAt: match.end,
+                contactId: contact.id,
+                notes: input.notes?.trim() || null,
+              })
+            } catch (err) {
+              // We lost the write race: between our slot snapshot above and this
+              // INSERT, another visitor claimed the same calendar+instant. The
+              // partial unique index turns that into a 23505, which is an honest
+              // "slot taken" — never a 500, and never a silent double-book. Any
+              // other error is a real fault. Throwing rolls the transaction back.
+              if (isUniqueViolation(err)) throw new SlotTaken()
+              throw err
+            }
+            await new TimelineRepo(tx, loc).add({
+              contactId: contact.id,
+              type: 'appointment_booked',
+              refTable: 'appointments',
+              refId: appointment.id,
+              payload: { calendar: cal.name, start: match.start },
+            })
+            await new OutboxRepo(tx, loc).insert({
+              id: `booking:${appointment.id}`,
+              aggregate: 'appointment',
+              aggregateId: appointment.id,
+              event: 'appointment_booked',
+              payload: { contactId: contact.id },
+            })
+            const result = { appointmentId: appointment.id, contactId: contact.id }
+            // N4: completion commits WITH the booking — a crash after commit
+            // can never leave the key behind the business state.
+            await completeIdempotencyKey(tx, scope, result)
+            return result
+          }),
+      )
+      if (!reused) {
+        // Fast path; the sweeper covers a crash here via the outbox row above.
+        // Skipped on replay: the original attempt already dispatched (or the
+        // sweeper will), and re-firing would be deduped anyway.
+        await deps.dispatch?.({
+          locationId: loc,
+          triggerType: 'appointment_booked',
+          contactId: result.contactId,
+          eventId: `booking:${result.appointmentId}`,
+        })
+      }
+      return c.json({ ok: true, ...result, ...(reused ? { deduped: true } : {}) })
     } catch (err) {
-      // We lost the write race: between our slot snapshot above and this INSERT,
-      // another visitor claimed the same calendar+instant. The partial unique
-      // index turns that into a 23505, which is an honest "slot taken" — never a
-      // 500, and never a silent double-book. Any other error is a real fault.
-      if (isUniqueViolation(err)) return c.json({ error: 'slot taken' }, 409)
+      if (err instanceof SlotTaken) return c.json({ error: 'slot taken' }, 409)
+      if (err instanceof IdempotencyConflict || err instanceof IdempotencyInProgress) {
+        return c.json({ error: err.message }, 409)
+      }
       throw err
     }
-    await new TimelineRepo(deps.db, loc).add({
-      contactId: contact.id,
-      type: 'appointment_booked',
-      refTable: 'appointments',
-      refId: appointment.id,
-      payload: { calendar: cal.name, start: match.start },
-    })
-
-    // Drive the capture → automation loop: a live appointment_booked workflow runs.
-    await deps.dispatch?.({ locationId: loc, triggerType: 'appointment_booked', contactId: contact.id })
-
-    return c.json({ ok: true, appointmentId: appointment.id, contactId: contact.id })
   })
 
   return app

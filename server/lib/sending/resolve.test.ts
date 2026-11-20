@@ -104,3 +104,52 @@ describe('resolveSmsSender', () => {
     expect(await resolveSmsSender(db, 'nope')).toEqual({ ok: false, reason: 'location not found' })
   })
 })
+
+describe('staging fence (N5/N15, G4)', () => {
+  const STAGING = { APP_ENV: 'staging', STAGING_SINK_ALLOWLIST: 'alice@example.com,+15551230001' }
+
+  it('staging returns the sink sender without touching settings, secrets, or the database', async () => {
+    process.env.ACME_BREVO_API_KEY = 'xkeysib-live-key'
+    process.env.ACME_TWILIO_ACCOUNT_SID = 'AC-live'
+    process.env.ACME_TWILIO_AUTH_TOKEN = 'live-token'
+    const emailDb = dbWithLocation({
+      sending: { emailProvider: 'brevo', fromEmail: 'ops@acme.com', smsProvider: 'twilio', smsFrom: '+1' },
+    })
+    const smsDb = dbWithLocation({
+      sending: { emailProvider: 'brevo', fromEmail: 'ops@acme.com', smsProvider: 'twilio', smsFrom: '+1' },
+    })
+    const email = await resolveEmailSender(emailDb, 'locA', STAGING)
+    const sms = await resolveSmsSender(smsDb, 'locA', STAGING)
+    expect(email.ok && email.sender.name).toBe('sink')
+    expect(sms.ok && sms.sender.name).toBe('sink')
+    // Zero queries: the fence short-circuits before locations, settings, vault.
+    expect(emailDb.calls).toHaveLength(0)
+    expect(smsDb.calls).toHaveLength(0)
+  })
+
+  it('staging with no allowlist refuses everything (fail-closed)', async () => {
+    for (const allowlist of [undefined, '', ' , ']) {
+      const env = { APP_ENV: 'staging', STAGING_SINK_ALLOWLIST: allowlist }
+      expect(await resolveEmailSender(new FakeDatabase(), 'locA', env)).toEqual({
+        ok: false,
+        reason: 'staging sink allowlist is not configured (STAGING_SINK_ALLOWLIST)',
+      })
+      expect(await resolveSmsSender(new FakeDatabase(), 'locA', env)).toEqual({
+        ok: false,
+        reason: 'staging sink allowlist is not configured (STAGING_SINK_ALLOWLIST)',
+      })
+    }
+  })
+
+  it('R14-03: restricted production preview refuses email + sms without touching settings, secrets, or the database', async () => {
+    const env = { APP_ENV: 'production', RESTRICTED_PREVIEW: 'true' }
+    const emailDb = new FakeDatabase()
+    const smsDb = new FakeDatabase()
+    const email = await resolveEmailSender(emailDb, 'locA', env)
+    const sms = await resolveSmsSender(smsDb, 'locA', env)
+    expect(email.ok).toBe(false)
+    expect(sms.ok).toBe(false)
+    expect(emailDb.calls).toHaveLength(0)
+    expect(smsDb.calls).toHaveLength(0)
+  })
+})

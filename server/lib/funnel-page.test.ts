@@ -166,3 +166,13 @@ test('renderFunnelNotFound returns a styled html 404 document', () => {
   expect(html).toContain('<!doctype html>')
   expect(html.toLowerCase()).toContain('not found')
 })
+
+// --- submission identity --------------------------------------------------
+
+test('R14-01: opt-in capture script sends a persisted Idempotency-Key per submission', () => {
+  const html = renderFunnelPage(funnel, optIn, [optIn, thanks])
+  expect(html).toContain('Idempotency-Key')
+  expect(html).toContain('sessionStorage')
+  expect(html).toContain('randomUUID')
+  expect(html).toContain('removeItem')
+})

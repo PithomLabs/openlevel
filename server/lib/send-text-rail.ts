@@ -20,9 +20,25 @@
  * `state` is the contact's US state; this rail only carries them. The gateway is
  * the legal authority that turns `state` into the texting window (8am-9pm in that
  * state's own timezone); an empty `state` comes back as a `unknown_state` refusal.
+ *
+ * External dependency (R14-10): the nerve-survey gateway is a SEPARATE
+ * service. This rail's contract with it (endpoint, header, body shape, and
+ * the SendTextResult reading rules above) is proven in repository-only
+ * tests ONLY against an injected fake fetch — i.e. the tests prove THIS
+ * side of the wire (request shape, refusal mapping, policy gating), never
+ * the gateway's behavior.
+ *
+ * What repository-only tests CANNOT prove (needs the live gateway):
+ * actual handset delivery; the state→timezone window enforcement; gateway
+ * nonce-dedup semantics on redelivery; real auth-error body shapes; timeout
+ * and latency behavior under load; Beeper-side acceptance. Staging proves
+ * the sink path (no live contact by construction) and production preview
+ * proves refusal; genuine live delivery is proven only in production with
+ * the real provider — a standing production gate, not a staging claim.
  */
 
 import type { SendTextFn, SendTextResult } from './operator-tools'
+import { sideEffectPolicyFromEnv } from './sending/policy'
 
 export interface HttpSendTextConfig {
   /** GATEWAY_TEXT_URL, e.g. https://api.acmecorp.com/text/send. */
@@ -31,6 +47,8 @@ export interface HttpSendTextConfig {
   secret: string
   /** Injectable for tests; defaults to global fetch. */
   fetchImpl?: typeof fetch
+  /** Injectable for tests; defaults to process.env. */
+  env?: Record<string, string | undefined>
 }
 
 const KNOWN_REASONS = new Set(['outside_window', 'unknown_state', 'not_configured', 'bad_phone', 'in_flight', 'failed'])
@@ -63,6 +81,16 @@ function parseSendTextResult(json: unknown): SendTextResult {
 /** Build the injected SendTextFn used by confirmOperatorWrite's send_text rail. */
 export function makeHttpSendText(cfg: HttpSendTextConfig): SendTextFn {
   return async (e164, body, nonce, state) => {
+    // Central side-effect policy (R14-03): the rail fetches ONLY in `live`
+    // mode. It carries no location/db context so it cannot sink — in staging,
+    // restricted preview, or under a malformed identity it REFUSES with zero
+    // gateway contact. Deterministic pre-send refusal, so 'refused' (not
+    // ambiguous 'failed'). Staging sink-first lives in the caller
+    // (confirmOperatorWrite), which never consults the rail in staging.
+    const policy = sideEffectPolicyFromEnv(cfg.env ?? process.env)
+    if (policy.mode !== 'live') {
+      return { ok: false, reason: 'refused' as const, detail: policy.reason }
+    }
     // Unwired server: report it plainly rather than pretending. The /confirm
     // handler turns this into "Texting isn't set up on this server yet."
     if (!cfg.url || !cfg.secret) return { ok: false, reason: 'not_configured' }

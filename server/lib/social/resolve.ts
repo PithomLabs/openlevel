@@ -1,5 +1,6 @@
 import type { Database } from '../../db/database'
 import { LocationsRepo } from '../../repos/locations-repo'
+import { sideEffectPolicyFromEnv } from '../sending/policy'
 import { resolveSecret } from '../vault'
 import { createFacebookAdapter } from './facebook-adapter'
 import { createInstagramAdapter } from './instagram-adapter'
@@ -44,7 +45,16 @@ export async function resolveSocialPublisher(
   db: Database,
   locationId: string,
   platform: string,
+  env: Record<string, string | undefined> = process.env,
 ): Promise<ResolvedSocialPublisher> {
+  // Staging fence (G4): public posts have no allowlist-able recipient, so
+  // staging refuses outright instead of publishing to real audiences.
+  // Restricted preview / malformed identity refuses as well (R14-03).
+  const policy = sideEffectPolicyFromEnv(env)
+  if (policy.mode === 'sink') {
+    return { ok: false, reason: 'social publishing is disabled in staging' }
+  }
+  if (policy.mode === 'refuse') return { ok: false, reason: policy.reason }
   const location = await new LocationsRepo(db).getById(locationId)
   if (!location) return { ok: false, reason: 'location not found' }
 

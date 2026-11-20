@@ -2,7 +2,9 @@ import type { Database } from '../../db/database'
 import { LocationsRepo } from '../../repos/locations-repo'
 import { resolveSecret } from '../vault'
 import { createBrevoAdapter } from './brevo-adapter'
+import { sideEffectPolicyFromEnv } from './policy'
 import type { EmailSender, SmsSender } from './provider'
+import { createSinkSender } from './sink'
 import { createTwilioAdapter } from './twilio-adapter'
 
 /** What a location chose under settings.sending. */
@@ -27,7 +29,22 @@ export type ResolvedSmsSender = { ok: true; sender: SmsSender } | { ok: false; r
  * `<slug>:brevo:api_key`. Missing config reports a reason instead of
  * throwing so routes and jobs can answer with honest copy.
  */
-export async function resolveEmailSender(db: Database, locationId: string): Promise<ResolvedEmailSender> {
+export async function resolveEmailSender(
+  db: Database,
+  locationId: string,
+  env: Record<string, string | undefined> = process.env,
+): Promise<ResolvedEmailSender> {
+  const policy = sideEffectPolicyFromEnv(env)
+  // Restricted preview / malformed identity: refuse before any adapter exists.
+  if (policy.mode === 'refuse') return { ok: false, reason: policy.reason }
+  if (policy.mode === 'sink') {
+    // Staging never constructs a real adapter (G4): production credentials
+    // are structurally unusable. An absent allowlist refuses everything.
+    if (policy.allowlist.length === 0) {
+      return { ok: false, reason: 'staging sink allowlist is not configured (STAGING_SINK_ALLOWLIST)' }
+    }
+    return { ok: true, sender: createSinkSender(db, locationId, { sink: true, allowlist: policy.allowlist }) }
+  }
   const location = await new LocationsRepo(db).getById(locationId)
   if (!location) return { ok: false, reason: 'location not found' }
 
@@ -48,7 +65,19 @@ export async function resolveEmailSender(db: Database, locationId: string): Prom
 }
 
 /** SMS counterpart: `<slug>:twilio:account_sid` + `<slug>:twilio:auth_token`. */
-export async function resolveSmsSender(db: Database, locationId: string): Promise<ResolvedSmsSender> {
+export async function resolveSmsSender(
+  db: Database,
+  locationId: string,
+  env: Record<string, string | undefined> = process.env,
+): Promise<ResolvedSmsSender> {
+  const policy = sideEffectPolicyFromEnv(env)
+  if (policy.mode === 'refuse') return { ok: false, reason: policy.reason }
+  if (policy.mode === 'sink') {
+    if (policy.allowlist.length === 0) {
+      return { ok: false, reason: 'staging sink allowlist is not configured (STAGING_SINK_ALLOWLIST)' }
+    }
+    return { ok: true, sender: createSinkSender(db, locationId, { sink: true, allowlist: policy.allowlist }) }
+  }
   const location = await new LocationsRepo(db).getById(locationId)
   if (!location) return { ok: false, reason: 'location not found' }
 

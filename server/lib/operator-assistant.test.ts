@@ -42,7 +42,7 @@ function toolUsingClaude(toolName: string, toolInput: Record<string, unknown> = 
   return { client, calls }
 }
 
-const LOC = { id: 'locA', name: 'Alex Co', slug: 'Alex', client_slug: 'Alex', branding: {}, settings: {} }
+const LOC = { id: 'locA', name: 'Alex Co', slug: 'Alex', client_slug: 'Alex', branding: {}, settings: { syntheticAttested: true } }
 
 test('answers with the per-client key + the operator (Sonnet) model, persisting nothing', async () => {
   const db = new FakeDatabase()
@@ -136,6 +136,29 @@ test('400 when the message is empty', async () => {
   const res = await runOperatorAssistant({ db, claude: client, resolveSecret: () => 'k' }, 'locA', [], '   ')
   expect(res).toMatchObject({ ok: false, status: 400 })
   expect(calls).toHaveLength(0)
+})
+
+test('R14-12: unattested tenant refuses with 403 before any secret or model contact', async () => {
+  const db = new FakeDatabase()
+  db.enqueue([{ ...LOC, settings: {} }])
+  const { client, calls } = fakeClaude()
+  let secrets = 0
+  const res = await runOperatorAssistant(
+    {
+      db,
+      claude: client,
+      resolveSecret: () => {
+        secrets += 1
+        return 'k'
+      },
+    },
+    'locA',
+    [],
+    'hi',
+  )
+  expect(res).toMatchObject({ ok: false, status: 403 })
+  expect(calls).toHaveLength(0)
+  expect(secrets).toBe(0)
 })
 
 // --- end-to-end: the read tool actually executes (what the dev stub can't show) ---

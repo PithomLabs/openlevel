@@ -115,3 +115,46 @@ describe('resolveVoiceProvider: edges', () => {
     expect(await resolveVoiceProvider(db, 'nope')).toEqual({ ok: false, reason: 'location not found' })
   })
 })
+
+describe('staging fence (R13-01)', () => {
+  const STAGING = { APP_ENV: 'staging', STAGING_SINK_ALLOWLIST: '+15551230001' }
+
+  it('staging returns the sink provider without touching settings, secrets, or the database', async () => {
+    process.env.ACME_TWILIO_ACCOUNT_SID = 'AC-live'
+    process.env.ACME_TWILIO_AUTH_TOKEN = 'live-token'
+    const db = dbWithLocation(twilioVoice)
+    const resolved = await resolveVoiceProvider(db, 'locA', { env: STAGING })
+    expect(resolved.ok && resolved.provider.name).toBe('sink')
+    expect(db.calls).toHaveLength(0)
+  })
+
+  it('staging with no allowlist refuses everything (fail-closed)', async () => {
+    for (const allowlist of [undefined, '', ' , ']) {
+      const resolved = await resolveVoiceProvider(new FakeDatabase(), 'locA', {
+        env: { APP_ENV: 'staging', STAGING_SINK_ALLOWLIST: allowlist },
+      })
+      expect(resolved).toEqual({
+        ok: false,
+        reason: 'staging sink allowlist is not configured (STAGING_SINK_ALLOWLIST)',
+      })
+    }
+  })
+
+  it('R14-03: restricted production preview refuses voice without touching settings, secrets, or the database', async () => {
+    const db = new FakeDatabase()
+    const resolved = await resolveVoiceProvider(db, 'locA', {
+      env: { APP_ENV: 'production', RESTRICTED_PREVIEW: 'true' },
+    })
+    expect(resolved.ok).toBe(false)
+    expect(db.calls).toHaveLength(0)
+  })
+
+  it('the sink voice adapter never verifies inbound webhooks (sink is not evidence)', async () => {
+    const db = dbWithLocation(twilioVoice)
+    const resolved = await resolveVoiceProvider(db, 'locA', { env: STAGING })
+    expect(resolved.ok).toBe(true)
+    if (!resolved.ok) return
+    expect(resolved.provider.verifyWebhook({ rawBody: '{}', headers: {}, url: 'https://x/hook' })).toBe(false)
+    expect(resolved.provider.parseEvent('{}')).toEqual({ type: 'ignored' })
+  })
+})

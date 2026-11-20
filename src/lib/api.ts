@@ -172,6 +172,7 @@ export type SmsProvider = 'twilio' | 'none'
 export interface ChannelStatus {
   connected: boolean
   reason?: string
+  simulated?: boolean
 }
 
 /** The Sending settings view: provider choices + sender identity, plus the
@@ -236,6 +237,7 @@ export interface VoiceSettings {
   vapiPhoneNumberId: string | null
   connected: boolean
   reason?: string
+  simulated?: boolean
 }
 
 export interface VoiceSettingsPatch {
@@ -287,6 +289,8 @@ export interface CampaignDelivery {
   sent: number
   skipped: number
   failed: number
+  quarantined: number
+  simulated: number
 }
 
 /** One distinct tag in a location with the number of contacts wearing it —
@@ -2071,10 +2075,13 @@ export const api = {
   // Perform ONE prepared change — the single write path of the whole assistant. The
   // operator taps Confirm on a proposal card; we replay its {verb, params}. The
   // tenant is the URL's location, never the body, so a confirm can't cross accounts.
+  // The proposal's server-minted id rides as Idempotency-Key (R14-02): a
+  // double-tap or retry-after-ambiguous-failure replays instead of re-writing.
   // Returns the plain-English result line; throws ApiError (e.g. 400) on refusal.
-  assistantConfirm: (loc: string, verb: string, params: Record<string, unknown>) =>
+  assistantConfirm: (loc: string, verb: string, params: Record<string, unknown>, idempotencyKey: string) =>
     req<{ message: string }>(`/loc/${loc}/assistant/confirm`, {
       method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey },
       body: JSON.stringify({ verb, params }),
     }),
 
@@ -2181,10 +2188,12 @@ export const api = {
       body: JSON.stringify(input),
     }),
   sendCampaign: (loc: string, id: string) =>
-    req<{ ok: true; campaign: Campaign; delivery: CampaignDelivery }>(
+    req<{ ok: true; campaign: Campaign; delivery: CampaignDelivery; simulated: boolean; cancelled: boolean }>(
       `/loc/${loc}/campaigns/${id}/send`,
       { method: 'POST' },
     ),
+  cancelCampaign: (loc: string, id: string) =>
+    req<{ ok: true; campaign: Campaign }>(`/loc/${loc}/campaigns/${id}/cancel`, { method: 'POST' }),
 
   workflows: (loc: string) => req<{ workflows: Workflow[] }>(`/loc/${loc}/workflows`),
   workflow: (loc: string, id: string) =>

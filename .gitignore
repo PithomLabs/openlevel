@@ -1,7 +1,29 @@
 node_modules
 dist
 server-dist
-.env
+# Case-insensitive env-file exclusion (R13-16/prompt-push D): on Linux
+# `.ENV`/`.Env` do NOT match lowercase `.env` rules and would be
+# committable. Character classes close every case variant.
+# The committed `.env.example` template stays trackable (negation below).
+.[eE][nN][vV]
+.[eE][nN][vV].*
+!.env.example
+# Private keys and credential material in any directory.
+*.pem
+*.key
+# N6: credential-export filenames (console downloads, vault exports).
+creds.json
+credentials.json
+secrets-export.json
+*-credentials.csv
+*-credentials.json
+# Keystore + SSH private-key formats.
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa*
+*.ppk
 *.log
 .DS_Store
 .claude/
@@ -14,5 +36,14 @@ server-dist
 # Dry-run output for one-off seed loaders (contains PII — never commit)
 scripts/.out/
 
+# Generated Phase 0 run artifacts (Review 11 §E): each suite run writes
+# timestamped evidence; only the curated docs/baselines stay tracked.
+# (Previously committed run files remain as history; new ones are ignored.)
+phase0/evidence/*-run-*
+phase0/evidence/app-suite.json
+
 # Local reference clone of the DBOS Transact TS SDK (not part of this repo)
 dbos-transact-ts/
+
+# Smoke transcripts (R14-05): regenerated per run, host-specific
+smoke-transcript-*.txt

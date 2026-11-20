@@ -1,0 +1,82 @@
+# Product test gates (OpenLevel staging MVP).
+#
+# Runs what `task check` runs locally, plus the real-PostgreSQL suite:
+# typechecks, the PGlite-backed unit suite, and test:pg (testcontainers
+# PostgreSQL 18.7 + the dbmate binary the adoption tests need).
+#
+# Hermetic by construction: no service credentials, no Fly/Neon resources,
+# zero secrets.* use. The dbmate pin (2.38.1) and hashes match the
+# Dockerfile's recorded release exactly — same binary CI smokes with.
+name: tests
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "26"
+  DBMATE_VERSION: "2.38.1"
+  DBMATE_SHA256_AMD64: "3e2c62735e0e63f3e5e4de6a3fa5c8a29ac9a34dcb8631a08d9589ab943ad9bd"
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - run: npm ci --no-audit --no-fund
+
+      - name: Typechecks (root, phase0, scripts — same commands CI uses)
+        run: |
+          npx tsc -p tsconfig.json --noEmit
+          npx tsc -p phase0/tsconfig.json --noEmit
+          npx tsc -p tsconfig.scripts.json --noEmit
+
+      - name: Unit suite (capped workers — the supported gate)
+        run: npx vitest run --maxWorkers=4
+
+      - name: Unit suite at default parallelism (advisory signal only)
+        id: default-parallelism
+        continue-on-error: true
+        run: npx vitest run 2>&1 | tail -30
+
+  pg:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      DBMATE_BIN: ${{ github.workspace }}/.tools/dbmate
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - run: npm ci --no-audit --no-fund
+
+      - name: Install pinned dbmate (hash-verified, same release as Dockerfile)
+        run: |
+          mkdir -p .tools
+          curl -sfL -o .tools/dbmate "https://github.com/amacneil/dbmate/releases/download/v${DBMATE_VERSION}/dbmate-linux-amd64"
+          echo "${DBMATE_SHA256_AMD64}  .tools/dbmate" | sha256sum -c -
+          chmod +x .tools/dbmate
+          .tools/dbmate --version | grep -q "dbmate version ${DBMATE_VERSION}"
+
+      - name: Real-PostgreSQL suite (testcontainers PG 18.7)
+        run: node db/pg-run.mjs
+
+      - name: Prove the adoption tests ran (not skipped for a missing binary)
+        run: |
+          node db/pg-run.mjs db/adopt-check.pg.test.ts 2>&1 | tee /tmp/adopt-out.txt | tail -5
+          grep -qE "[1-9][0-9]* passed" /tmp/adopt-out.txt
+          if grep -q "skipped" /tmp/adopt-out.txt; then echo "ADOPT TESTS SKIPPED"; exit 1; fi

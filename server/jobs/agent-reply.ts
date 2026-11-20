@@ -1,5 +1,6 @@
 import type { sendChatwootMessage } from '../lib/chatwoot-client'
 import { generateAgentText } from '../lib/agent-engine'
+import { INFERENCE_REFUSAL, isInferenceAllowed } from '../lib/inference-gate'
 import { sendOutboundMessage } from '../lib/outbound'
 import { resolveSecret as defaultResolveSecret } from '../lib/vault'
 import type { Database } from '../db/database'
@@ -21,6 +22,12 @@ export interface AgentReplyPayload {
   locationId: string
   conversationId: string
   contactId: string | null
+  /**
+   * The inbound message that triggered this reply (FIND-07). Stable across
+   * redeliveries: the worker claims (location, message) before handling, so
+   * a retried job never drafts twice.
+   */
+  messageId: string
 }
 
 export interface AgentReplyDeps {
@@ -63,6 +70,12 @@ export async function handleAgentReply(
 
   const location = await new LocationsRepo(db).getById(payload.locationId)
   if (!location) return { mode: 'approve-first', text: '', skipped: 'location not found' }
+
+  // Inference provenance (R14-12): unattested tenants skip without model
+  // contact. Observable skip (not silent): the job result names the reason.
+  if (!isInferenceAllowed(location.settings as Record<string, unknown> | null)) {
+    return { mode: 'approve-first', text: '', skipped: INFERENCE_REFUSAL }
+  }
 
   const mode: ReplyMode =
     (location.settings as { replyMode?: string }).replyMode === 'autonomous' ? 'autonomous' : 'approve-first'

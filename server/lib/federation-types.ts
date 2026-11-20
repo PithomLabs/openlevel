@@ -108,17 +108,30 @@ export const OPENLEVEL_CARD: CapabilityCard = {
 
 const REF_PREFIX = 'ol:'
 
+/** Proposal refs older than this are expired (R13-10): a stale approval tap
+ *  must re-propose against live state instead of confirming a dead context. */
+export const PROPOSAL_REF_TTL_MS = 24 * 60 * 60 * 1000
+
 /** Encode a native {verb, params} into the opaque proposal ref so it survives the
- *  gateway's pass-through (which strips any non-contract field). */
+ *  gateway's pass-through (which strips any non-contract field). Stamps `iat`
+ *  so decode can expire stale refs. */
 export function encodeActionRef(action: { verb: string; params: Record<string, unknown> }): string {
-  const json = JSON.stringify({ verb: action.verb, params: action.params ?? {} })
+  const json = JSON.stringify({ verb: action.verb, params: action.params ?? {}, iat: Date.now() })
   return REF_PREFIX + Buffer.from(json, 'utf8').toString('base64url')
 }
 
-/** Decode a proposal ref back to {verb, params}, or null if it is not ours /
- *  malformed. confirmOperatorWrite re-validates the verb + re-resolves params, so a
+export type DecodedActionRef =
+  | { verb: string; params: Record<string, unknown> }
+  | { expired: true }
+  | null
+
+/** Decode a proposal ref back to {verb, params}; null if it is not ours /
+ *  malformed; {expired:true} if its stamp is past TTL. Refs minted before
+ *  stamping (no iat) are accepted as legacy — rejecting them would strand
+ *  in-flight proposals across the deploy that introduced expiry.
+ *  confirmOperatorWrite re-validates the verb + re-resolves params, so a
  *  forged ref can do no more than a forged {verb, params} body could. */
-export function decodeActionRef(ref: unknown): { verb: string; params: Record<string, unknown> } | null {
+export function decodeActionRef(ref: unknown, now: number = Date.now()): DecodedActionRef {
   if (typeof ref !== 'string' || !ref.startsWith(REF_PREFIX)) return null
   try {
     const json = Buffer.from(ref.slice(REF_PREFIX.length), 'base64url').toString('utf8')
@@ -128,6 +141,10 @@ export function decodeActionRef(ref: unknown): { verb: string; params: Record<st
     const params = (o as Record<string, unknown>).params
     if (typeof verb !== 'string' || !verb) return null
     if (!params || typeof params !== 'object') return null
+    const iat = (o as Record<string, unknown>).iat
+    if (typeof iat === 'number' && Number.isFinite(iat) && now - iat > PROPOSAL_REF_TTL_MS) {
+      return { expired: true }
+    }
     return { verb, params: params as Record<string, unknown> }
   } catch {
     return null

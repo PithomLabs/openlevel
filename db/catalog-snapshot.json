@@ -1,0 +1,3481 @@
+{
+  "snapshotVersion": 1,
+  "pgMajor": "18",
+  "tables": {
+    "affiliate_clicks": {
+      "columns": {
+        "affiliate_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "clicked_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "contact_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (affiliate_id) REFERENCES affiliates(id) ON DELETE CASCADE",
+        "FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE SET NULL",
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "affiliate_programs": {
+      "columns": {
+        "commission_type": {
+          "type": "text",
+          "nullable": false,
+          "default": "'percent'::text"
+        },
+        "commission_value": {
+          "type": "numeric",
+          "nullable": false,
+          "default": "0"
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "landing_url": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "name": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "status": {
+          "type": "text",
+          "nullable": false,
+          "default": "'active'::text"
+        },
+        "updated_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "affiliate_referrals": {
+      "columns": {
+        "affiliate_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "amount_cents": {
+          "type": "bigint",
+          "nullable": false,
+          "default": "0"
+        },
+        "commission_cents": {
+          "type": "bigint",
+          "nullable": false,
+          "default": "0"
+        },
+        "contact_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "description": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "occurred_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "paid_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": null
+        },
+        "status": {
+          "type": "text",
+          "nullable": false,
+          "default": "'pending'::text"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (affiliate_id) REFERENCES affiliates(id) ON DELETE CASCADE",
+        "FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE SET NULL",
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "affiliates": {
+      "columns": {
+        "code": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "contact_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "email": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "name": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "program_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "status": {
+          "type": "text",
+          "nullable": false,
+          "default": "'active'::text"
+        },
+        "updated_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE SET NULL",
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "FOREIGN KEY (program_id) REFERENCES affiliate_programs(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "appointments": {
+      "columns": {
+        "calendar_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "contact_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "ends_at": {
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": null
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_text": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "notes": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "starts_at": {
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": null
+        },
+        "status": {
+          "type": "text",
+          "nullable": false,
+          "default": "'scheduled'::text"
+        },
+        "title": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "updated_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (calendar_id) REFERENCES calendars(id) ON DELETE CASCADE",
+        "FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE SET NULL",
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "blog_posts": {
+      "columns": {
+        "author": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "body": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "cover_image_url": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "excerpt": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "published_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": null
+        },
+        "slug": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "status": {
+          "type": "text",
+          "nullable": false,
+          "default": "'draft'::text"
+        },
+        "title": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "updated_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "calendars": {
+      "columns": {
+        "availability": {
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'[]'::jsonb"
+        },
+        "booking_blurb": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "booking_enabled": {
+          "type": "boolean",
+          "nullable": false,
+          "default": "false"
+        },
+        "booking_headline": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "booking_slug": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "buffer_min": {
+          "type": "integer",
+          "nullable": false,
+          "default": "0"
+        },
+        "color": {
+          "type": "text",
+          "nullable": false,
+          "default": "'indigo'::text"
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "duration_min": {
+          "type": "integer",
+          "nullable": false,
+          "default": "30"
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "name": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "notice_min": {
+          "type": "integer",
+          "nullable": false,
+          "default": "120"
+        },
+        "position": {
+          "type": "integer",
+          "nullable": true,
+          "default": "0"
+        },
+        "rolling_days": {
+          "type": "integer",
+          "nullable": false,
+          "default": "14"
+        },
+        "slot_interval_min": {
+          "type": "integer",
+          "nullable": false,
+          "default": "0"
+        },
+        "timezone": {
+          "type": "text",
+          "nullable": false,
+          "default": "'America/New_York'::text"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "calls": {
+      "columns": {
+        "contact_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "direction": {
+          "type": "text",
+          "nullable": false,
+          "default": "'outbound'::text"
+        },
+        "duration_seconds": {
+          "type": "integer",
+          "nullable": true,
+          "default": null
+        },
+        "external_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "from_number": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "provider": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "recording_url": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "status": {
+          "type": "text",
+          "nullable": false,
+          "default": "'queued'::text"
+        },
+        "summary": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "to_number": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "transcript": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE SET NULL",
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "campaign_recipients": {
+      "columns": {
+        "campaign_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "contact_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "status": {
+          "type": "text",
+          "nullable": false,
+          "default": "'sent'::text"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE",
+        "FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE SET NULL",
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "campaigns": {
+      "columns": {
+        "audience_tag": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "body": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "channel": {
+          "type": "text",
+          "nullable": false,
+          "default": "'sms'::text"
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "name": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "recipient_count": {
+          "type": "integer",
+          "nullable": false,
+          "default": "0"
+        },
+        "sent_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": null
+        },
+        "sent_count": {
+          "type": "integer",
+          "nullable": false,
+          "default": "0"
+        },
+        "status": {
+          "type": "text",
+          "nullable": false,
+          "default": "'draft'::text"
+        },
+        "subject": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "updated_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "channel_links": {
+      "columns": {
+        "config": {
+          "type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb"
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "inbox_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "provider": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)",
+        "UNIQUE (provider, inbox_id)"
+      ]
+    },
+    "communities": {
+      "columns": {
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "description": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "name": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "slug": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "status": {
+          "type": "text",
+          "nullable": false,
+          "default": "'draft'::text"
+        },
+        "updated_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "community_channels": {
+      "columns": {
+        "community_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "name": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "position": {
+          "type": "integer",
+          "nullable": false,
+          "default": "0"
+        },
+        "slug": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (community_id) REFERENCES communities(id) ON DELETE CASCADE",
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "community_comments": {
+      "columns": {
+        "body": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "member_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "post_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "FOREIGN KEY (member_id) REFERENCES community_members(id) ON DELETE SET NULL",
+        "FOREIGN KEY (post_id) REFERENCES community_posts(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "community_members": {
+      "columns": {
+        "community_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "contact_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "email": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "joined_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "name": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "role": {
+          "type": "text",
+          "nullable": false,
+          "default": "'member'::text"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (community_id) REFERENCES communities(id) ON DELETE CASCADE",
+        "FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE SET NULL",
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "community_post_likes": {
+      "columns": {
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "member_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "post_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "FOREIGN KEY (member_id) REFERENCES community_members(id) ON DELETE CASCADE",
+        "FOREIGN KEY (post_id) REFERENCES community_posts(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "community_posts": {
+      "columns": {
+        "body": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "channel_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "community_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "member_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "pinned": {
+          "type": "boolean",
+          "nullable": false,
+          "default": "false"
+        },
+        "title": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "updated_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (channel_id) REFERENCES community_channels(id) ON DELETE CASCADE",
+        "FOREIGN KEY (community_id) REFERENCES communities(id) ON DELETE CASCADE",
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "FOREIGN KEY (member_id) REFERENCES community_members(id) ON DELETE SET NULL",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "contact_notes": {
+      "columns": {
+        "author": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "body": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "contact_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "pinned": {
+          "type": "boolean",
+          "nullable": false,
+          "default": "false"
+        },
+        "updated_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE",
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "contact_tasks": {
+      "columns": {
+        "body": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "completed_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": null
+        },
+        "contact_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "due_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": null
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "title": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "updated_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE",
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "contacts": {
+      "columns": {
+        "archived_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": null
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "custom_fields": {
+          "type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb"
+        },
+        "emails": {
+          "type": "text[]",
+          "nullable": true,
+          "default": "'{}'::text[]"
+        },
+        "external_ids": {
+          "type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb"
+        },
+        "first_name": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "last_name": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "match_key": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "name": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "phones": {
+          "type": "text[]",
+          "nullable": true,
+          "default": "'{}'::text[]"
+        },
+        "source": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "state": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "tags": {
+          "type": "text[]",
+          "nullable": true,
+          "default": "'{}'::text[]"
+        },
+        "updated_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "conversations": {
+      "columns": {
+        "assignee": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "channel": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "contact_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "external_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "last_message_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "provider": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "status": {
+          "type": "text",
+          "nullable": true,
+          "default": "'open'::text"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE SET NULL",
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "coupons": {
+      "columns": {
+        "code": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "description": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "discount_type": {
+          "type": "text",
+          "nullable": false,
+          "default": "'percent'::text"
+        },
+        "discount_value": {
+          "type": "bigint",
+          "nullable": false,
+          "default": "0"
+        },
+        "expires_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": null
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "max_redemptions": {
+          "type": "integer",
+          "nullable": true,
+          "default": null
+        },
+        "status": {
+          "type": "text",
+          "nullable": false,
+          "default": "'active'::text"
+        },
+        "times_redeemed": {
+          "type": "integer",
+          "nullable": false,
+          "default": "0"
+        },
+        "updated_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "courses": {
+      "columns": {
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "description": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "slug": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "status": {
+          "type": "text",
+          "nullable": false,
+          "default": "'draft'::text"
+        },
+        "title": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "updated_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "custom_fields": {
+      "columns": {
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "key": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "label": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "options": {
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'[]'::jsonb"
+        },
+        "placeholder": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "position": {
+          "type": "integer",
+          "nullable": false,
+          "default": "0"
+        },
+        "type": {
+          "type": "text",
+          "nullable": false,
+          "default": "'text'::text"
+        },
+        "updated_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "custom_values": {
+      "columns": {
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "key": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "name": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "position": {
+          "type": "integer",
+          "nullable": false,
+          "default": "0"
+        },
+        "updated_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "value": {
+          "type": "text",
+          "nullable": false,
+          "default": "''::text"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "enrollments": {
+      "columns": {
+        "completed_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": null
+        },
+        "contact_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "course_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "enrolled_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "status": {
+          "type": "text",
+          "nullable": false,
+          "default": "'active'::text"
+        },
+        "token": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE SET NULL",
+        "FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE",
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "form_submissions": {
+      "columns": {
+        "contact_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "form_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "values": {
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE SET NULL",
+        "FOREIGN KEY (form_id) REFERENCES forms(id) ON DELETE CASCADE",
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "forms": {
+      "columns": {
+        "content": {
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "name": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "slug": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "status": {
+          "type": "text",
+          "nullable": false,
+          "default": "'draft'::text"
+        },
+        "submissions": {
+          "type": "integer",
+          "nullable": false,
+          "default": "0"
+        },
+        "updated_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "funnel_steps": {
+      "columns": {
+        "content": {
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "funnel_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "name": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "path": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "position": {
+          "type": "integer",
+          "nullable": false,
+          "default": "0"
+        },
+        "submissions": {
+          "type": "integer",
+          "nullable": false,
+          "default": "0"
+        },
+        "type": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (funnel_id) REFERENCES funnels(id) ON DELETE CASCADE",
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "funnels": {
+      "columns": {
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "name": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "slug": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "status": {
+          "type": "text",
+          "nullable": false,
+          "default": "'draft'::text"
+        },
+        "updated_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "idempotency_keys": {
+      "columns": {
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "key": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "operation": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "payload_hash": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "result": {
+          "type": "jsonb",
+          "nullable": true,
+          "default": null
+        },
+        "status": {
+          "type": "text",
+          "nullable": false,
+          "default": "'in_progress'::text"
+        },
+        "updated_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (location_id, operation, key)"
+      ]
+    },
+    "invoices": {
+      "columns": {
+        "checkout_external_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "checkout_provider": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "checkout_url": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "contact_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "currency": {
+          "type": "text",
+          "nullable": false,
+          "default": "'usd'::text"
+        },
+        "due_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": null
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "issued_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": null
+        },
+        "items": {
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'[]'::jsonb"
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "notes": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "number": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "paid_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": null
+        },
+        "payment_method": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "status": {
+          "type": "text",
+          "nullable": false,
+          "default": "'draft'::text"
+        },
+        "updated_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE SET NULL",
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "lesson_completions": {
+      "columns": {
+        "completed_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "enrollment_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "lesson_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (enrollment_id) REFERENCES enrollments(id) ON DELETE CASCADE",
+        "FOREIGN KEY (lesson_id) REFERENCES lessons(id) ON DELETE CASCADE",
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "lessons": {
+      "columns": {
+        "content": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "course_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "position": {
+          "type": "integer",
+          "nullable": false,
+          "default": "0"
+        },
+        "title": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "video_url": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE",
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "locations": {
+      "columns": {
+        "branding": {
+          "type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb"
+        },
+        "client_slug": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "name": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "settings": {
+          "type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb"
+        },
+        "slug": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        }
+      },
+      "constraints": [
+        "PRIMARY KEY (id)",
+        "UNIQUE (slug)"
+      ]
+    },
+    "messages": {
+      "columns": {
+        "attachments": {
+          "type": "jsonb",
+          "nullable": true,
+          "default": "'[]'::jsonb"
+        },
+        "author_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "author_type": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "body": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "channel": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "contact_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "conversation_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "direction": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "external_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "provider": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "status": {
+          "type": "text",
+          "nullable": true,
+          "default": "'sent'::text"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE SET NULL",
+        "FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE",
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "operator_locations": {
+      "columns": {
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "operator_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "FOREIGN KEY (operator_id) REFERENCES operators(id) ON DELETE CASCADE",
+        "PRIMARY KEY (operator_id, location_id)"
+      ]
+    },
+    "operators": {
+      "columns": {
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "email": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "name": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "password_hash": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "role": {
+          "type": "text",
+          "nullable": false,
+          "default": "'owner'::text"
+        }
+      },
+      "constraints": [
+        "PRIMARY KEY (id)",
+        "UNIQUE (email)"
+      ]
+    },
+    "opportunities": {
+      "columns": {
+        "assignee": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "contact_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "name": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "pipeline_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "position": {
+          "type": "integer",
+          "nullable": true,
+          "default": "0"
+        },
+        "source": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "stage_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "status": {
+          "type": "text",
+          "nullable": false,
+          "default": "'open'::text"
+        },
+        "updated_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "value_cents": {
+          "type": "bigint",
+          "nullable": true,
+          "default": "0"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE SET NULL",
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "FOREIGN KEY (pipeline_id) REFERENCES pipelines(id) ON DELETE CASCADE",
+        "FOREIGN KEY (stage_id) REFERENCES pipeline_stages(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "outbound_sink": {
+      "columns": {
+        "body": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "channel": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "recipient": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "subject": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "outbox": {
+      "columns": {
+        "aggregate": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "aggregate_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "attempts": {
+          "type": "integer",
+          "nullable": false,
+          "default": "0"
+        },
+        "available_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "event": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "payload": {
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        "status": {
+          "type": "text",
+          "nullable": false,
+          "default": "'pending'::text"
+        },
+        "updated_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "pipeline_stages": {
+      "columns": {
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "name": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "pipeline_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "position": {
+          "type": "integer",
+          "nullable": true,
+          "default": "0"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "FOREIGN KEY (pipeline_id) REFERENCES pipelines(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "pipelines": {
+      "columns": {
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "name": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "position": {
+          "type": "integer",
+          "nullable": true,
+          "default": "0"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "processed_events": {
+      "columns": {
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "event_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "trigger_type": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "workflow_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (location_id, event_id, workflow_id)"
+      ]
+    },
+    "products": {
+      "columns": {
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "currency": {
+          "type": "text",
+          "nullable": false,
+          "default": "'usd'::text"
+        },
+        "description": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "name": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "position": {
+          "type": "integer",
+          "nullable": false,
+          "default": "0"
+        },
+        "price_cents": {
+          "type": "bigint",
+          "nullable": false,
+          "default": "0"
+        },
+        "recurring_interval": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "status": {
+          "type": "text",
+          "nullable": false,
+          "default": "'active'::text"
+        },
+        "type": {
+          "type": "text",
+          "nullable": false,
+          "default": "'one_time'::text"
+        },
+        "updated_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "proposals": {
+      "columns": {
+        "contact_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "content": {
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "currency": {
+          "type": "text",
+          "nullable": false,
+          "default": "'usd'::text"
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "signed_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": null
+        },
+        "signer_name": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "slug": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "status": {
+          "type": "text",
+          "nullable": false,
+          "default": "'draft'::text"
+        },
+        "title": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "updated_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE SET NULL",
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "push_tokens": {
+      "columns": {
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "operator_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "platform": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "token": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "updated_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (operator_id) REFERENCES operators(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "review_requests": {
+      "columns": {
+        "channel": {
+          "type": "text",
+          "nullable": false,
+          "default": "'sms'::text"
+        },
+        "completed_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": null
+        },
+        "contact_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "sent_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": null
+        },
+        "status": {
+          "type": "text",
+          "nullable": false,
+          "default": "'pending'::text"
+        },
+        "token": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE SET NULL",
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "reviews": {
+      "columns": {
+        "body": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "contact_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "external_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "rating": {
+          "type": "integer",
+          "nullable": false,
+          "default": null
+        },
+        "request_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "reviewer_name": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "source": {
+          "type": "text",
+          "nullable": false,
+          "default": "'direct'::text"
+        },
+        "status": {
+          "type": "text",
+          "nullable": false,
+          "default": "'published'::text"
+        }
+      },
+      "constraints": [
+        "CHECK (((rating >= 1) AND (rating <= 5)))",
+        "FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE SET NULL",
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "FOREIGN KEY (request_id) REFERENCES review_requests(id) ON DELETE SET NULL",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "social_accounts": {
+      "columns": {
+        "connected": {
+          "type": "boolean",
+          "nullable": false,
+          "default": "false"
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "handle": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "platform": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "updated_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "social_post_targets": {
+      "columns": {
+        "account_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "detail": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "external_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "post_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "status": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (account_id) REFERENCES social_accounts(id) ON DELETE CASCADE",
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "FOREIGN KEY (post_id) REFERENCES social_posts(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "social_posts": {
+      "columns": {
+        "body": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "media_url": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "published_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": null
+        },
+        "scheduled_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": null
+        },
+        "status": {
+          "type": "text",
+          "nullable": false,
+          "default": "'draft'::text"
+        },
+        "updated_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "subscriptions": {
+      "columns": {
+        "amount_cents": {
+          "type": "bigint",
+          "nullable": false,
+          "default": "0"
+        },
+        "billing_interval": {
+          "type": "text",
+          "nullable": false,
+          "default": "'month'::text"
+        },
+        "canceled_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": null
+        },
+        "contact_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "currency": {
+          "type": "text",
+          "nullable": false,
+          "default": "'usd'::text"
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "name": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "product_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "started_at": {
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()"
+        },
+        "status": {
+          "type": "text",
+          "nullable": false,
+          "default": "'active'::text"
+        },
+        "updated_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE SET NULL",
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE SET NULL",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "survey_submissions": {
+      "columns": {
+        "contact_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "survey_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "values": {
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE SET NULL",
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "FOREIGN KEY (survey_id) REFERENCES surveys(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "surveys": {
+      "columns": {
+        "content": {
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "name": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "slug": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "status": {
+          "type": "text",
+          "nullable": false,
+          "default": "'draft'::text"
+        },
+        "submissions": {
+          "type": "integer",
+          "nullable": false,
+          "default": "0"
+        },
+        "updated_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "templates": {
+      "columns": {
+        "body": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "channel": {
+          "type": "text",
+          "nullable": false,
+          "default": "'email'::text"
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "name": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "subject": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "updated_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "timeline_events": {
+      "columns": {
+        "contact_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "occurred_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "payload": {
+          "type": "jsonb",
+          "nullable": true,
+          "default": "'{}'::jsonb"
+        },
+        "ref_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "ref_table": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "type": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE",
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "trigger_link_clicks": {
+      "columns": {
+        "clicked_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "contact_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "link_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE SET NULL",
+        "FOREIGN KEY (link_id) REFERENCES trigger_links(id) ON DELETE CASCADE",
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "trigger_links": {
+      "columns": {
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "destination_url": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "name": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "slug": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "updated_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "workflow_actions": {
+      "columns": {
+        "config": {
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "position": {
+          "type": "integer",
+          "nullable": false,
+          "default": "0"
+        },
+        "type": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "workflow_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "FOREIGN KEY (workflow_id) REFERENCES workflows(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "workflow_runs": {
+      "columns": {
+        "contact_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "finished_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": null
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "started_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "status": {
+          "type": "text",
+          "nullable": false,
+          "default": "'running'::text"
+        },
+        "steps": {
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'[]'::jsonb"
+        },
+        "trigger_type": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "workflow_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE SET NULL",
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "FOREIGN KEY (workflow_id) REFERENCES workflows(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "workflow_waits": {
+      "columns": {
+        "attempts": {
+          "type": "integer",
+          "nullable": false,
+          "default": "0"
+        },
+        "claimed_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": null
+        },
+        "claimed_by": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "contact_id": {
+          "type": "text",
+          "nullable": true,
+          "default": null
+        },
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "definition_hash": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "due_at": {
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": null
+        },
+        "from_position": {
+          "type": "integer",
+          "nullable": false,
+          "default": null
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "run_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "status": {
+          "type": "text",
+          "nullable": false,
+          "default": "'pending'::text"
+        },
+        "trigger_type": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "updated_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "workflow_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE SET NULL",
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "FOREIGN KEY (run_id) REFERENCES workflow_runs(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    },
+    "workflows": {
+      "columns": {
+        "created_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        },
+        "id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "location_id": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "name": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "status": {
+          "type": "text",
+          "nullable": false,
+          "default": "'draft'::text"
+        },
+        "trigger_config": {
+          "type": "jsonb",
+          "nullable": false,
+          "default": "'{}'::jsonb"
+        },
+        "trigger_type": {
+          "type": "text",
+          "nullable": false,
+          "default": null
+        },
+        "updated_at": {
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "default": "now()"
+        }
+      },
+      "constraints": [
+        "FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE",
+        "PRIMARY KEY (id)"
+      ]
+    }
+  },
+  "indexes": [
+    "CREATE INDEX actions_by_workflow ON public.workflow_actions USING btree (location_id, workflow_id, \"position\")",
+    "CREATE INDEX affiliate_clicks_by_affiliate ON public.affiliate_clicks USING btree (location_id, affiliate_id, clicked_at DESC)",
+    "CREATE INDEX affiliate_programs_by_location ON public.affiliate_programs USING btree (location_id, created_at DESC)",
+    "CREATE INDEX affiliate_referrals_by_affiliate ON public.affiliate_referrals USING btree (location_id, affiliate_id, occurred_at DESC)",
+    "CREATE INDEX affiliates_by_program ON public.affiliates USING btree (location_id, program_id, created_at DESC)",
+    "CREATE INDEX appointments_by_time ON public.appointments USING btree (location_id, starts_at)",
+    "CREATE INDEX blog_posts_by_location ON public.blog_posts USING btree (location_id, created_at DESC)",
+    "CREATE INDEX blog_posts_published ON public.blog_posts USING btree (location_id, published_at DESC)",
+    "CREATE INDEX calendars_by_location ON public.calendars USING btree (location_id, \"position\")",
+    "CREATE INDEX calls_by_location ON public.calls USING btree (location_id, created_at DESC)",
+    "CREATE INDEX campaigns_by_location ON public.campaigns USING btree (location_id, created_at DESC)",
+    "CREATE INDEX communities_by_location ON public.communities USING btree (location_id, created_at DESC)",
+    "CREATE INDEX community_channels_by_community ON public.community_channels USING btree (location_id, community_id, \"position\")",
+    "CREATE INDEX community_comments_by_post ON public.community_comments USING btree (location_id, post_id, created_at)",
+    "CREATE INDEX community_members_by_community ON public.community_members USING btree (location_id, community_id, joined_at DESC)",
+    "CREATE INDEX community_post_likes_by_post ON public.community_post_likes USING btree (location_id, post_id)",
+    "CREATE INDEX community_posts_by_channel ON public.community_posts USING btree (location_id, channel_id, created_at DESC)",
+    "CREATE INDEX community_posts_by_community ON public.community_posts USING btree (location_id, community_id, created_at DESC)",
+    "CREATE INDEX contact_notes_by_contact ON public.contact_notes USING btree (location_id, contact_id, pinned DESC, created_at DESC)",
+    "CREATE INDEX contacts_live ON public.contacts USING btree (location_id) WHERE (archived_at IS NULL)",
+    "CREATE INDEX contact_tasks_by_contact ON public.contact_tasks USING btree (location_id, contact_id, completed_at, due_at)",
+    "CREATE INDEX contact_tasks_by_location ON public.contact_tasks USING btree (location_id, completed_at, due_at)",
+    "CREATE INDEX coupons_by_location ON public.coupons USING btree (location_id, created_at DESC)",
+    "CREATE INDEX courses_by_location ON public.courses USING btree (location_id, created_at DESC)",
+    "CREATE INDEX custom_fields_by_location ON public.custom_fields USING btree (location_id, \"position\")",
+    "CREATE INDEX custom_values_by_location ON public.custom_values USING btree (location_id, \"position\")",
+    "CREATE INDEX enrollments_by_course ON public.enrollments USING btree (location_id, course_id, created_at DESC)",
+    "CREATE INDEX invoices_by_checkout_external ON public.invoices USING btree (location_id, checkout_external_id)",
+    "CREATE INDEX invoices_by_location ON public.invoices USING btree (location_id, created_at DESC)",
+    "CREATE INDEX lesson_completions_by_enrollment ON public.lesson_completions USING btree (location_id, enrollment_id)",
+    "CREATE INDEX lessons_by_course ON public.lessons USING btree (location_id, course_id, \"position\")",
+    "CREATE INDEX opps_by_stage ON public.opportunities USING btree (location_id, pipeline_id, stage_id, \"position\")",
+    "CREATE INDEX outbox_drain ON public.outbox USING btree (location_id, status, available_at) WHERE (status = ANY (ARRAY['pending'::text, 'sending'::text]))",
+    "CREATE INDEX pipelines_by_location ON public.pipelines USING btree (location_id, \"position\")",
+    "CREATE INDEX products_by_location ON public.products USING btree (location_id, \"position\", created_at)",
+    "CREATE INDEX proposals_by_location ON public.proposals USING btree (location_id, created_at DESC)",
+    "CREATE INDEX push_tokens_by_operator ON public.push_tokens USING btree (operator_id)",
+    "CREATE INDEX recipients_by_campaign ON public.campaign_recipients USING btree (location_id, campaign_id)",
+    "CREATE INDEX review_requests_by_location ON public.review_requests USING btree (location_id, created_at DESC)",
+    "CREATE INDEX reviews_by_location ON public.reviews USING btree (location_id, created_at DESC)",
+    "CREATE INDEX runs_by_workflow ON public.workflow_runs USING btree (location_id, workflow_id, started_at DESC)",
+    "CREATE INDEX sink_by_location ON public.outbound_sink USING btree (location_id, created_at DESC)",
+    "CREATE INDEX social_accounts_by_location ON public.social_accounts USING btree (location_id, created_at)",
+    "CREATE INDEX social_posts_by_location ON public.social_posts USING btree (location_id, created_at DESC)",
+    "CREATE INDEX social_posts_by_schedule ON public.social_posts USING btree (location_id, status, scheduled_at)",
+    "CREATE INDEX social_post_targets_by_post ON public.social_post_targets USING btree (location_id, post_id)",
+    "CREATE INDEX stages_by_pipeline ON public.pipeline_stages USING btree (location_id, pipeline_id, \"position\")",
+    "CREATE INDEX steps_by_funnel ON public.funnel_steps USING btree (location_id, funnel_id, \"position\")",
+    "CREATE INDEX submissions_by_form ON public.form_submissions USING btree (location_id, form_id, created_at DESC)",
+    "CREATE INDEX subscriptions_by_location ON public.subscriptions USING btree (location_id, created_at DESC)",
+    "CREATE INDEX survey_submissions_by_survey ON public.survey_submissions USING btree (location_id, survey_id, created_at DESC)",
+    "CREATE INDEX templates_by_location ON public.templates USING btree (location_id, channel, created_at DESC)",
+    "CREATE INDEX timeline_by_contact ON public.timeline_events USING btree (location_id, contact_id, occurred_at DESC)",
+    "CREATE INDEX trigger_link_clicks_by_link ON public.trigger_link_clicks USING btree (location_id, link_id, clicked_at DESC)",
+    "CREATE INDEX trigger_links_by_location ON public.trigger_links USING btree (location_id, created_at DESC)",
+    "CREATE INDEX waits_due ON public.workflow_waits USING btree (status, due_at) WHERE (status = 'pending'::text)",
+    "CREATE INDEX workflows_by_location ON public.workflows USING btree (location_id, created_at DESC)",
+    "CREATE UNIQUE INDEX affiliates_code_unique ON public.affiliates USING btree (location_id, code)",
+    "CREATE UNIQUE INDEX appointments_no_double_book ON public.appointments USING btree (calendar_id, starts_at) WHERE (status <> 'cancelled'::text)",
+    "CREATE UNIQUE INDEX blog_posts_slug ON public.blog_posts USING btree (location_id, slug)",
+    "CREATE UNIQUE INDEX calendars_booking_slug ON public.calendars USING btree (location_id, booking_slug) WHERE (booking_slug IS NOT NULL)",
+    "CREATE UNIQUE INDEX calls_external_dedup ON public.calls USING btree (location_id, provider, external_id) WHERE (external_id IS NOT NULL)",
+    "CREATE UNIQUE INDEX communities_slug ON public.communities USING btree (location_id, slug)",
+    "CREATE UNIQUE INDEX community_channels_slug ON public.community_channels USING btree (community_id, slug)",
+    "CREATE UNIQUE INDEX community_post_likes_unique ON public.community_post_likes USING btree (post_id, member_id)",
+    "CREATE UNIQUE INDEX contacts_match_key ON public.contacts USING btree (location_id, match_key) WHERE (match_key IS NOT NULL)",
+    "CREATE UNIQUE INDEX conversations_provider_external ON public.conversations USING btree (location_id, provider, external_id)",
+    "CREATE UNIQUE INDEX coupons_code_per_location ON public.coupons USING btree (location_id, code)",
+    "CREATE UNIQUE INDEX courses_slug ON public.courses USING btree (location_id, slug)",
+    "CREATE UNIQUE INDEX custom_fields_key ON public.custom_fields USING btree (location_id, key)",
+    "CREATE UNIQUE INDEX custom_values_key ON public.custom_values USING btree (location_id, key)",
+    "CREATE UNIQUE INDEX enrollments_token ON public.enrollments USING btree (token)",
+    "CREATE UNIQUE INDEX forms_slug ON public.forms USING btree (location_id, slug)",
+    "CREATE UNIQUE INDEX funnels_slug ON public.funnels USING btree (location_id, slug)",
+    "CREATE UNIQUE INDEX invoices_number ON public.invoices USING btree (location_id, number)",
+    "CREATE UNIQUE INDEX lesson_completions_unique ON public.lesson_completions USING btree (enrollment_id, lesson_id)",
+    "CREATE UNIQUE INDEX messages_provider_external ON public.messages USING btree (location_id, provider, external_id)",
+    "CREATE UNIQUE INDEX proposals_slug ON public.proposals USING btree (location_id, slug)",
+    "CREATE UNIQUE INDEX push_tokens_token_unique ON public.push_tokens USING btree (token)",
+    "CREATE UNIQUE INDEX recipients_campaign_contact ON public.campaign_recipients USING btree (location_id, campaign_id, contact_id) WHERE (contact_id IS NOT NULL)",
+    "CREATE UNIQUE INDEX review_requests_token ON public.review_requests USING btree (token)",
+    "CREATE UNIQUE INDEX reviews_external_dedup ON public.reviews USING btree (location_id, source, external_id) WHERE (external_id IS NOT NULL)",
+    "CREATE UNIQUE INDEX social_post_targets_unique ON public.social_post_targets USING btree (post_id, account_id)",
+    "CREATE UNIQUE INDEX surveys_slug ON public.surveys USING btree (location_id, slug)",
+    "CREATE UNIQUE INDEX trigger_links_slug ON public.trigger_links USING btree (location_id, slug)",
+    "CREATE UNIQUE INDEX waits_single_pending_per_run ON public.workflow_waits USING btree (run_id) WHERE (status = ANY (ARRAY['pending'::text, 'claimed'::text]))"
+  ],
+  "extensions": [
+    "plpgsql"
+  ]
+}

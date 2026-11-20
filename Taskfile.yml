@@ -17,7 +17,12 @@ vars:
   FLY_APP: ''
   FLY_CONFIG: ''
   CONFIRM_DEPLOY: ''
+  CONFIRM_PRODUCTION: ''
+  RELEASE_IMAGE: ''
+  IMAGE_DIGEST: ''
   PROJECT_ID: ''
+  BRANCH_BASE: ''
+  BRANCH_COMPARE: ''
 
 tasks:
   default:
@@ -266,6 +271,27 @@ tasks:
       - "npm run test:phase0:integration"
     silent: true
 
+  test:pg:
+    desc: Run the real-PostgreSQL product suite (needs Docker; honest NOT RUN without it, FAIL in CI)
+    cmds:
+      - "npm run test:pg"
+    silent: true
+
+  smoke:
+    desc: Local smoke — build image, boot ephemeral PG + app (staging env), run probe inventory, transcript
+    cmds:
+      - "npx tsx scripts/smoke/local.ts"
+    silent: true
+
+  smoke:remote:
+    desc: Remote smoke vs a deployed app (needs SMOKE_TARGET, SMOKE_BASE_URL, SMOKE_FLY_APP, SMOKE_NEON_PROJECT)
+    preconditions:
+      - sh: test -n "$SMOKE_TARGET" -a -n "$SMOKE_BASE_URL" -a -n "$SMOKE_FLY_APP" -a -n "$SMOKE_NEON_PROJECT"
+        msg: "Set SMOKE_TARGET (staging|preview), SMOKE_BASE_URL, SMOKE_FLY_APP, SMOKE_NEON_PROJECT"
+    cmds:
+      - "npx tsx scripts/smoke/run.ts"
+    silent: true
+
   typecheck:
     desc: Root typecheck (same command CI uses)
     cmds:
@@ -362,14 +388,150 @@ tasks:
     silent: true
 
   fly:deploy:
-    desc: FUTURE USE ONLY — guarded deploy (needs FLY_APP, FLY_CONFIG, CONFIRM_DEPLOY=yes; never the P2 config)
+    desc: Guarded deploy with explicit app+config (needs FLY_APP, FLY_CONFIG, CONFIRM_DEPLOY=yes; prod also CONFIRM_PRODUCTION=yes; never the P2 config)
     env:
       FLY_APP: "{{.FLY_APP}}"
       FLY_CONFIG: "{{.FLY_CONFIG}}"
       CONFIRM_DEPLOY: "{{.CONFIRM_DEPLOY}}"
+      CONFIRM_PRODUCTION: "{{.CONFIRM_PRODUCTION}}"
     cmds:
       - "node scripts/toolchain.mjs fly-guard"
       - "fly deploy -a \"$FLY_APP\" -c \"$FLY_CONFIG\""
+    silent: true
+
+  env:status:
+    desc: Local environment report — runtime, fly configs, image, migrations (read-only, no cloud, no secrets)
+    cmds:
+      - "node scripts/toolchain.mjs env status"
+    silent: true
+
+  env:validate:
+    desc: Fail-closed validation of the deployable surface (local; exit nonzero on any incoherence)
+    cmds:
+      - "node scripts/toolchain.mjs env validate"
+    silent: true
+
+  secrets:status:
+    desc: OS credential-store inventory — FOUND/MISSING per secret name (local, names only, never values)
+    cmds:
+      - "node scripts/lib/secret-store.mjs status"
+    silent: true
+
+  deploy:dev:
+    desc: "Development cloud operation — deploy a CI-built digest to openlevel-dev (needs IMAGE_DIGEST + CONFIRM_DEPLOY=yes; owner-authorized)"
+    preconditions:
+      - sh: test "$CONFIRM_DEPLOY" = "yes"
+        msg: "Refusing: re-run as `task deploy:dev IMAGE_DIGEST=<name@sha256:...> CONFIRM_DEPLOY=yes`"
+      - sh: test -n "$IMAGE_DIGEST"
+        msg: "IMAGE_DIGEST is required: deploy the exact CI-published digest (see the product-packaging artifact)"
+    env:
+      FLY_APP: "openlevel-dev"
+      FLY_CONFIG: "fly.dev.toml"
+      CONFIRM_DEPLOY: "{{.CONFIRM_DEPLOY}}"
+      IMAGE_DIGEST: "{{.IMAGE_DIGEST}}"
+    cmds:
+      - "node scripts/toolchain.mjs fly-guard"
+      - 'fly deploy -a "$FLY_APP" -c "$FLY_CONFIG" --image "$IMAGE_DIGEST"'
+    silent: true
+
+  deploy:staging:
+    desc: "Staging cloud operation — deploy an explicit digest (needs IMAGE_DIGEST + CONFIRM_DEPLOY=yes; prefer task promote:staging)"
+    preconditions:
+      - sh: test "$CONFIRM_DEPLOY" = "yes"
+        msg: "Refusing: re-run as `task deploy:staging IMAGE_DIGEST=<name@sha256:...> CONFIRM_DEPLOY=yes`"
+      - sh: test -n "$IMAGE_DIGEST"
+        msg: "IMAGE_DIGEST is required: prefer `task promote:staging` (verified equality) over a hand-pasted digest"
+    env:
+      FLY_APP: "openlevel-staging"
+      FLY_CONFIG: "fly.toml"
+      CONFIRM_DEPLOY: "{{.CONFIRM_DEPLOY}}"
+      IMAGE_DIGEST: "{{.IMAGE_DIGEST}}"
+    cmds:
+      - "node scripts/toolchain.mjs fly-guard"
+      - 'fly deploy -a "$FLY_APP" -c "$FLY_CONFIG" --image "$IMAGE_DIGEST"'
+    silent: true
+
+  deploy:production:
+    desc: "Production cloud operation — deploy an explicit digest (needs IMAGE_DIGEST + double confirmation; prefer task promote:production)"
+    preconditions:
+      - sh: test "$CONFIRM_DEPLOY" = "yes"
+        msg: "Refusing: re-run as `task deploy:production IMAGE_DIGEST=<name@sha256:...> CONFIRM_DEPLOY=yes CONFIRM_PRODUCTION=yes`"
+      - sh: test "$CONFIRM_PRODUCTION" = "yes"
+        msg: "Refusing: production needs CONFIRM_PRODUCTION=yes on top of CONFIRM_DEPLOY=yes"
+      - sh: test -n "$IMAGE_DIGEST"
+        msg: "IMAGE_DIGEST is required: prefer `task promote:production` (verified equality) over a hand-pasted digest"
+    env:
+      FLY_APP: "openlevel-prod"
+      FLY_CONFIG: "fly.prod.toml"
+      CONFIRM_DEPLOY: "{{.CONFIRM_DEPLOY}}"
+      CONFIRM_PRODUCTION: "{{.CONFIRM_PRODUCTION}}"
+      IMAGE_DIGEST: "{{.IMAGE_DIGEST}}"
+    cmds:
+      - "node scripts/toolchain.mjs fly-guard"
+      - 'fly deploy -a "$FLY_APP" -c "$FLY_CONFIG" --image "$IMAGE_DIGEST"'
+    silent: true
+
+  promote:staging:
+    desc: "Promote dev's CURRENT deployed digest to staging, verified equal (needs CONFIRM_DEPLOY=yes; owner-authorized)"
+    preconditions:
+      - sh: test "$CONFIRM_DEPLOY" = "yes"
+        msg: "Refusing: re-run as `task promote:staging CONFIRM_DEPLOY=yes`"
+    env:
+      FLY_APP: "openlevel-staging"
+      FLY_CONFIG: "fly.toml"
+      CONFIRM_DEPLOY: "{{.CONFIRM_DEPLOY}}"
+      SOURCE_APP: "openlevel-dev"
+    cmds:
+      - >-
+        DIGEST="$(node scripts/toolchain.mjs resolve-deployed-digest)" &&
+        IMAGE_DIGEST="$DIGEST" node scripts/toolchain.mjs fly-guard &&
+        fly deploy -a "$FLY_APP" -c "$FLY_CONFIG" --image "$DIGEST"
+    silent: true
+
+  promote:production:
+    desc: "Promote staging's CURRENT deployed digest to production, verified equal (needs double confirmation)"
+    preconditions:
+      - sh: test "$CONFIRM_DEPLOY" = "yes"
+        msg: "Refusing: re-run as `task promote:production CONFIRM_DEPLOY=yes CONFIRM_PRODUCTION=yes`"
+      - sh: test "$CONFIRM_PRODUCTION" = "yes"
+        msg: "Refusing: production needs CONFIRM_PRODUCTION=yes on top of CONFIRM_DEPLOY=yes"
+    env:
+      FLY_APP: "openlevel-prod"
+      FLY_CONFIG: "fly.prod.toml"
+      CONFIRM_DEPLOY: "{{.CONFIRM_DEPLOY}}"
+      CONFIRM_PRODUCTION: "{{.CONFIRM_PRODUCTION}}"
+      SOURCE_APP: "openlevel-staging"
+    cmds:
+      - >-
+        DIGEST="$(node scripts/toolchain.mjs resolve-deployed-digest)" &&
+        IMAGE_DIGEST="$DIGEST" node scripts/toolchain.mjs fly-guard &&
+        fly deploy -a "$FLY_APP" -c "$FLY_CONFIG" --image "$DIGEST"
+    silent: true
+
+  release:status:
+    desc: Show one app's releases + status + deployed image (read-only; needs FLY_APP=<name>)
+    preconditions:
+      - sh: test -n "$FLY_APP"
+        msg: "FLY_APP is required: task release:status FLY_APP=<app-name>"
+    env:
+      FLY_APP: "{{.FLY_APP}}"
+    cmds:
+      - 'fly releases -a "$FLY_APP"'
+      - 'fly status -a "$FLY_APP"'
+      - 'fly image show -a "$FLY_APP"'
+    silent: true
+
+  release:rollback:
+    desc: Redeploy an explicit previous image (needs FLY_APP, FLY_CONFIG, RELEASE_IMAGE, CONFIRM_DEPLOY=yes; prod also CONFIRM_PRODUCTION=yes)
+    env:
+      FLY_APP: "{{.FLY_APP}}"
+      FLY_CONFIG: "{{.FLY_CONFIG}}"
+      RELEASE_IMAGE: "{{.RELEASE_IMAGE}}"
+      CONFIRM_DEPLOY: "{{.CONFIRM_DEPLOY}}"
+      CONFIRM_PRODUCTION: "{{.CONFIRM_PRODUCTION}}"
+    cmds:
+      - "node scripts/toolchain.mjs release-guard"
+      - 'fly deploy -a "$FLY_APP" -c "$FLY_CONFIG" --image "$RELEASE_IMAGE" --rollback'
     silent: true
 
   neon:version:
@@ -402,12 +564,14 @@ tasks:
     silent: true
 
   neon:diff:
-    desc: Show a Neon branch diff view (read-only; needs PROJECT_ID=<id>)
+    desc: Show a Neon branch schema-diff view (read-only; needs PROJECT_ID=<id>, optional BRANCH_BASE/BRANCH_COMPARE)
     preconditions:
       - sh: test -n "$PROJECT_ID"
         msg: "PROJECT_ID is required: task neon:diff PROJECT_ID=<project-id>"
     env:
       PROJECT_ID: "{{.PROJECT_ID}}"
+      BRANCH_BASE: "{{.BRANCH_BASE}}"
+      BRANCH_COMPARE: "{{.BRANCH_COMPARE}}"
     cmds:
       - "node scripts/toolchain.mjs neon diff"
     silent: true

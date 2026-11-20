@@ -1,8 +1,30 @@
-# Staging build context hygiene (P2). Never ship dependencies, VCS state,
-# local credentials, or evidence into the image build context.
+# Build context hygiene (product image + P2 staging). Never ship
+# dependencies, VCS state, local credentials, or evidence into an image.
+# NB: the Dockerfiles COPY explicit paths only; this file is defense-in-depth
+# so a future `COPY . .` cannot smuggle secrets into a layer.
 node_modules/
 .git/
+.[eE][nN][vV]
+.[eE][nN][vV].*
 phase0/.env
+*.pem
+*.key
+creds.json
+credentials.json
+secrets-export.json
+*-credentials.csv
+*-credentials.json
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa*
+*.ppk
 phase0/evidence/
+openconnector/
+docs/
+.github/
+dist/
+dist-server/
 *.log
 .DS_Store

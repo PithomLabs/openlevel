@@ -1,0 +1,47 @@
+# OpenLevel product deploy — SHARED DEVELOPMENT (openlevel-dev).
+#
+# Same image and conventions as fly.toml (staging); only the identity
+# differs (APP_ENV=development, dev Neon target, dev secrets). Synthetic
+# data only; sandbox/test-destination providers; developer-policy deploys.
+#
+# NODE_ENV stays "production": it is a build hint, and it keeps strict
+# secret validation ON here via the config backstop (a shared cloud env
+# must never accept dev-default secrets even with APP_ENV=development).
+#
+# Region: intentionally UNSET — owner confirms alongside staging (runbook
+# docs/deployment/ENVIRONMENTS.md). Single Machine; brief deploy outage.
+# Never point this app at staging/production databases or secrets.
+
+app = "openlevel-dev"
+
+# Top-level process keys live HERE, before the first [section] (TOML assigns
+# every key to the most recent table header — see fly.toml).
+kill_signal = "SIGTERM"
+kill_timeout = "30s"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[deploy]
+  strategy = "rolling"
+  release_command = "npm run db:migrate:release"
+
+[http_service]
+  internal_port = 8790
+  force_https = true
+  auto_stop_machines = "off"
+  min_machines_running = 1
+  [[http_service.checks]]
+    path = "/ready"
+    interval = "15s"
+    timeout = "5s"
+
+[env]
+  NODE_ENV = "production"
+  APP_ENV = "development"
+  ROLE = "all"
+  PORT = "8790"
+
+[[restart]]
+  policy = "on-failure"
+  retries = 10

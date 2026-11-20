@@ -49,7 +49,6 @@ export const UNIT_TEST_FILES = [
   'phase0/p1/handler-sql.test.ts',
   'phase0/test-env.test.ts',
   'phase0/setup-contracts.test.ts',
-  'phase0/baseline-gate.test.ts',
   'phase0/container-identity.test.ts',
   'phase0/provisioners/provisioners.test.ts',
   'phase0/p2/boot-worker.test.ts',

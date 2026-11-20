@@ -27,10 +27,10 @@ function harness(db: FakeDatabase, deps: Partial<AssistantRouteDeps> = {}, locat
   return app
 }
 
-function postJson(app: Hono<AppEnv>, path: string, body: unknown) {
+function postJson(app: Hono<AppEnv>, path: string, body: unknown, headers: Record<string, string> = {}) {
   return app.request(path, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...headers },
     body: JSON.stringify(body),
   })
 }
@@ -45,7 +45,7 @@ function fakeSendText(result: SendTextResult = { ok: true, messageId: 'm1' }) {
   return { fn, calls }
 }
 
-const LOC = { id: 'locA', name: 'Alex Co', slug: 'Alex', client_slug: 'Alex', branding: {}, settings: {} }
+const LOC = { id: 'locA', name: 'Alex Co', slug: 'Alex', client_slug: 'Alex', branding: {}, settings: { syntheticAttested: true } }
 const TEXT_CONTACT = { id: 'c1', location_id: 'locA', name: 'Jane Doe', phones: ['+16025551234'], emails: [], tags: [] }
 
 test('answers an operator message, scoped to the location, returning the reply', async () => {
@@ -80,6 +80,18 @@ test('threads prior turns + the new message through to the model', async () => {
   const msgs = calls[0]!.messages as { role: string; content: string }[]
   expect(msgs[msgs.length - 1]).toEqual({ role: 'user', content: 'find her open tasks' })
   expect(msgs.some((m) => m.role === 'assistant' && m.content === 'A lead in Phoenix.')).toBe(true)
+})
+
+test('R14-12: /messages surfaces 403 for an unattested tenant, model untouched', async () => {
+  const db = new FakeDatabase()
+  db.enqueue([{ ...LOC, settings: {} }]) // getById: no attestation
+  const { client, calls } = fakeClaude()
+  const res = await postJson(harness(db, { claude: client, resolveSecret: () => 'sk' }), '/messages', {
+    history: [],
+    message: 'hi',
+  })
+  expect(res.status).toBe(403)
+  expect(calls).toHaveLength(0)
 })
 
 test('501 when no claude client is configured', async () => {
@@ -141,6 +153,39 @@ test('/confirm refuses a verb that is not a known write tool, touching nothing',
   expect(res.status).toBe(400)
   const body = (await res.json()) as { error: string }
   expect(body.error).toMatch(/unknown action|not/i)
+  expect(db.calls).toHaveLength(0)
+})
+
+test('R13-10: same Idempotency-Key with a contradictory proposal is a 409, never a second write', async () => {
+  const db = new FakeDatabase()
+  db.enqueue([{ id: 'c1', location_id: 'locA', name: 'Jane Doe', tags: [] }]) // resolve: contacts.get
+  db.enqueue([]) // idempotency INSERT -> conflict (key seen)
+  db.enqueue([{ payload_hash: 'hash-of-something-else', status: 'completed', result: {}, updated_at: new Date().toISOString() }]) // SELECT -> mismatch
+  const res = await postJson(
+    harness(db, { resolveSecret: () => 'sk' }),
+    '/confirm',
+    { verb: 'tag_contact', params: { contactId: 'c1', tag: 'vip' } },
+    { 'Idempotency-Key': 'k-assistant-1' },
+  )
+  expect(res.status).toBe(409)
+  expect(db.calls.filter((q) => /INSERT INTO contact_tasks|UPDATE contacts/i.test(q.sql))).toHaveLength(0)
+})
+
+test('R14-02: malformed Idempotency-Key is a 400 and touches nothing', async () => {
+  const db = new FakeDatabase()
+  // Enqueued so execution WOULD succeed — the 400 must come from key
+  // validation before any database touch, not from a downstream failure.
+  db.enqueue([{ id: 'c1', location_id: 'locA', name: 'Jane Doe', tags: [] }]) // resolve: contacts.get
+  db.enqueue([{ key: 'k' }]) // idempotency INSERT -> won claim
+  db.enqueue([{ id: 'c1', tags: ['vip'] }]) // perform: addTag
+  db.enqueue([{ status: 'in_progress' }]) // status re-check
+  const res = await postJson(
+    harness(db, { resolveSecret: () => 'sk' }),
+    '/confirm',
+    { verb: 'tag_contact', params: { contactId: 'c1', tag: 'vip' } },
+    { 'Idempotency-Key': 'x'.repeat(129) },
+  )
+  expect(res.status).toBe(400)
   expect(db.calls).toHaveLength(0)
 })
 

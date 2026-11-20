@@ -255,6 +255,12 @@ export function renderField(field: FormField): string {
  * advances to the next page (`nextBase + data.next`, used by funnels) or shows
  * an inline confirmation (`successText`, used by standalone forms and the last
  * step of a funnel). There is exactly one copy of the capture logic.
+ *
+ * Submission identity (R14-01): every page load mints one stable key for its
+ * logical submission, PERSISTED in sessionStorage under the endpoint URL so a
+ * reload or ambiguous network failure retries with the SAME key, and cleared
+ * only when the server confirms success. The server binds the key to the
+ * payload — retries replay, distinct submits stay distinct.
  */
 export function captureScript(opts: {
   formId: string
@@ -274,16 +280,29 @@ export function captureScript(opts: {
   var status=document.getElementById(${sid});
   var btn=form.querySelector('button[type="submit"]');
   var label=btn?btn.textContent:'';
+  var action=form.getAttribute('action');
+  var keySlot='ol-submission:'+action;
+  function storedKey(){
+    try{if(window.sessionStorage){var k=sessionStorage.getItem(keySlot);if(k)return k;}}catch(e){}
+    return null;
+  }
+  var subKey=storedKey();
+  if(!subKey){
+    subKey=(window.crypto&&crypto.randomUUID)?crypto.randomUUID():'ol-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2);
+    try{if(window.sessionStorage)sessionStorage.setItem(keySlot,subKey);}catch(e){}
+  }
+  function clearKey(){try{if(window.sessionStorage)sessionStorage.removeItem(keySlot);}catch(e){}}
   form.addEventListener('submit',function(e){
     e.preventDefault();
     var values={};
     var els=form.querySelectorAll('input[name], textarea[name], select[name]');
     for(var i=0;i<els.length;i++){values[els[i].name]=els[i].value;}
     if(btn){btn.disabled=true;btn.textContent='Sending…';}
-    fetch(form.getAttribute('action'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({values:values})})
+    fetch(action,{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':subKey},body:JSON.stringify({values:values})})
       .then(function(r){return r.json().catch(function(){return {};});})
       .then(function(data){
         if(data&&data.ok){
+          clearKey();
           if(data.next){window.location.assign(${base}+data.next);return;}
           form.style.display='none';
           if(status){status.textContent=${okText};status.style.display='block';}

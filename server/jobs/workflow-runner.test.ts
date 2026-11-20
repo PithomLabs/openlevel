@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { PGlite } from '@electric-sql/pglite'
+import { vi } from 'vitest'
 import { PgliteDatabase } from '../db/pglite-database'
 import { CustomValuesRepo } from '../repos/custom-values-repo'
 import { WorkflowActionsRepo } from '../repos/workflow-actions-repo'
@@ -35,7 +36,7 @@ test('runs every step in order, mutates data for real, and completes the run', a
     { type: 'add_tag', config: { tag: 'new-lead' } },
   ])
 
-  const run = await runWorkflow({ db }, { locationId: loc, workflowId, contactId, triggerType: 'contact_created' })
+  const run = await runWorkflow({ db, waitsEnabled: true }, { locationId: loc, workflowId, contactId, triggerType: 'contact_created' })
 
   expect(run.status).toBe('completed')
   expect(run.steps).toHaveLength(2)
@@ -54,6 +55,28 @@ test('runs every step in order, mutates data for real, and completes the run', a
   expect(timeline).toHaveLength(1)
 })
 
+test('send_sms/send_email steps say logged, never sent or delivered (Review-5 honesty lock)', async () => {
+  const { db, loc, contactId, workflowId } = await harness([
+    { type: 'send_sms', config: { body: 'hello' } },
+    { type: 'send_email', config: { subject: 'hi', body: 'hello' } },
+  ])
+
+  const run = await runWorkflow({ db, waitsEnabled: true }, { locationId: loc, workflowId, contactId, triggerType: 'contact_created' })
+
+  expect(run.status).toBe('completed')
+  for (const step of run.steps) {
+    expect(step.status).toBe('done')
+    expect(step.detail ?? '').toMatch(/logged/i)
+    expect(step.detail ?? '').not.toMatch(/sent|delivered/i)
+  }
+  const payloads = await db.query<{ payload: { status?: string } }>(
+    "SELECT payload FROM timeline_events WHERE contact_id=$1 AND type='automation_action'",
+    [contactId],
+  )
+  expect(payloads).toHaveLength(2)
+  for (const row of payloads) expect(row.payload.status).toBe('logged')
+})
+
 test('resolves a {{custom_values.<key>}} merge tag from the location in a send_sms body', async () => {
   const { db, loc, contactId, workflowId } = await harness([
     { type: 'send_sms', config: { body: 'Hi {{first_name}}, this is {{custom_values.business_name}}' } },
@@ -61,7 +84,7 @@ test('resolves a {{custom_values.<key>}} merge tag from the location in a send_s
   // The location defines the business-name constant the template references.
   await new CustomValuesRepo(db, loc).create({ name: 'Business Name', value: 'Lighthouse Realty' })
 
-  const run = await runWorkflow({ db }, { locationId: loc, workflowId, contactId, triggerType: 'contact_created' })
+  const run = await runWorkflow({ db, waitsEnabled: true }, { locationId: loc, workflowId, contactId, triggerType: 'contact_created' })
 
   expect(run.status).toBe('completed')
   // Both the contact token and the location custom value resolved in one pass.
@@ -71,10 +94,45 @@ test('resolves a {{custom_values.<key>}} merge tag from the location in a send_s
 test('a contactless step is skipped, not failed, and the run still completes', async () => {
   const { db, loc, workflowId } = await harness([{ type: 'add_tag', config: { tag: 'x' } }])
 
-  const run = await runWorkflow({ db }, { locationId: loc, workflowId, contactId: null, triggerType: 'contact_created' })
+  const run = await runWorkflow({ db, waitsEnabled: true }, { locationId: loc, workflowId, contactId: null, triggerType: 'contact_created' })
 
   expect(run.status).toBe('completed')
   expect(run.steps[0]?.status).toBe('skipped')
+})
+
+test('G1: a disabled wait step fails the run loudly — no timer, no continuation, no silent strand', async () => {
+  const { db, loc, contactId, workflowId } = await harness([
+    { type: 'add_tag', config: { tag: 'before' } },
+    { type: 'wait', config: { minutes: 30 } },
+    { type: 'add_tag', config: { tag: 'after' } },
+  ])
+  const schedule = vi.fn()
+  const scheduleWait = vi.fn(async () => {})
+  const run = await runWorkflow(
+    { db, waitsEnabled: false, schedule, scheduleWait },
+    { locationId: loc, workflowId, contactId, triggerType: 'contact_created' },
+  )
+  expect(run.status).toBe('failed')
+  expect(run.steps).toHaveLength(2)
+  expect(run.steps[1]).toMatchObject({ type: 'wait', status: 'failed' })
+  expect(run.steps[1]?.detail).toMatch(/waits are disabled/)
+  expect(schedule).not.toHaveBeenCalled()
+  expect(scheduleWait).not.toHaveBeenCalled()
+  const waits = await db.query<{ n: number }>('SELECT count(*)::int AS n FROM workflow_waits')
+  expect(waits[0]?.n).toBe(0)
+  // Steps after the wait never ran.
+  const [c] = await db.query<{ tags: string[] }>('SELECT tags FROM contacts WHERE id=$1', [contactId])
+  expect(c?.tags).toContain('before')
+  expect(c?.tags).not.toContain('after')
+})
+
+test('G1: wait-unrelated workflows complete normally while waits are disabled', async () => {
+  const { db, loc, contactId, workflowId } = await harness([{ type: 'add_tag', config: { tag: 'x' } }])
+  const run = await runWorkflow(
+    { db, waitsEnabled: false },
+    { locationId: loc, workflowId, contactId, triggerType: 'contact_created' },
+  )
+  expect(run.status).toBe('completed')
 })
 
 test('wait pauses the run and a scheduled resume finishes the remaining steps', async () => {
@@ -91,7 +149,7 @@ test('wait pauses the run and a scheduled resume finishes the remaining steps', 
   }
 
   const paused = await runWorkflow(
-    { db, schedule },
+    { db, waitsEnabled: true, schedule },
     { locationId: loc, workflowId, contactId, triggerType: 'contact_created' },
   )
 
@@ -127,7 +185,7 @@ test('a workflow deleted during the wait fails the resume cleanly instead of thr
   }
 
   const paused = await runWorkflow(
-    { db, schedule },
+    { db, waitsEnabled: true, schedule },
     { locationId: loc, workflowId, contactId, triggerType: 'contact_created' },
   )
   expect(paused.status).toBe('waiting')

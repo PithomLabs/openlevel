@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import type { Database } from '../db/database'
 import type { WorkflowDispatch } from '../jobs/workflow-dispatcher'
 import { AppointmentsRepo } from '../repos/appointments-repo'
@@ -225,7 +226,7 @@ export function buildAgentTools(deps: AgentToolsDeps): AgentToolset {
       refId: appointmentId,
       payload: { calendar: cal.name, start: match.start },
     })
-    await workflowDispatch?.({ locationId, triggerType: 'appointment_booked', contactId })
+    await workflowDispatch?.({ locationId, triggerType: 'appointment_booked', contactId, eventId: randomUUID() })
 
     return { toolUseId: '', content: `Booked ${match.label} on ${dateLabel(ymd)}.` }
   }

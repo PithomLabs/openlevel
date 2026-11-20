@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
 import { z } from 'zod'
@@ -91,6 +92,7 @@ export function publicProposalsRoute(deps: {
       locationId: loc,
       triggerType: 'proposal_signed',
       contactId: signed.contact_id,
+      eventId: randomUUID(),
     })
 
     return c.json({ ok: true, signer_name: signed.signer_name, signed_at: signed.signed_at })

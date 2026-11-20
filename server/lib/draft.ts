@@ -3,6 +3,7 @@ import { type ClaudeClient, DRAFT_MODEL } from '../jobs/agent-reply'
 import { ConversationsRepo } from '../repos/conversations-repo'
 import { LocationsRepo } from '../repos/locations-repo'
 import { generateAgentText } from './agent-engine'
+import { INFERENCE_REFUSAL, isInferenceAllowed } from './inference-gate'
 import { resolveSecret as defaultResolveSecret } from './vault'
 
 export interface DraftDeps {
@@ -14,7 +15,7 @@ export interface DraftDeps {
 
 export interface DraftResult {
   ok: boolean
-  status: 200 | 400 | 404
+  status: 200 | 400 | 403 | 404
   text?: string
   error?: string
 }
@@ -37,6 +38,12 @@ export async function draftConversationReply(
 
   const location = await new LocationsRepo(db).getById(locationId)
   if (!location) return { ok: false, status: 404, error: 'location not found' }
+
+  // Inference provenance (R14-12): drafts read tenant data into the model,
+  // so unattested tenants refuse before any secret or model contact.
+  if (!isInferenceAllowed(location.settings as Record<string, unknown> | null)) {
+    return { ok: false, status: 403, error: INFERENCE_REFUSAL }
+  }
 
   const slug = location.client_slug ?? location.slug
   const apiKey = getSecret(`${slug}:anthropic:api_key`)

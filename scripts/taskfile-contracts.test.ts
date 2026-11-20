@@ -88,6 +88,106 @@ describe('fly argument safety (P2-3)', () => {
   })
 })
 
+describe('deploy task safety (explicit env selection, no inference)', () => {
+  test.each([
+    ['deploy:dev', 'openlevel-dev', 'fly.dev.toml'],
+    ['deploy:staging', 'openlevel-staging', 'fly.toml'],
+    ['deploy:production', 'openlevel-prod', 'fly.prod.toml'],
+  ])('%s pins its app + config literally (no CLI-provided target)', (task, app, config) => {
+    const body = blocks.get(task) ?? ''
+    expect(body).toContain(`FLY_APP: "${app}"`)
+    expect(body).toContain(`FLY_CONFIG: "${config}"`)
+    expect(body).not.toContain('FLY_APP: "{{.FLY_APP}}"')
+    expect(body).not.toContain('FLY_CONFIG: "{{.FLY_CONFIG}}"')
+    expect(body).toContain('fly-guard')
+  })
+
+  test.each(['deploy:dev', 'deploy:staging', 'deploy:production'])('%s refuses without CONFIRM_DEPLOY=yes', (task) => {
+    const body = blocks.get(task) ?? ''
+    expect(body).toMatch(/test "\$CONFIRM_DEPLOY" = "yes"/)
+  })
+
+  test('deploy:production needs a second production confirmation', () => {
+    const body = blocks.get('deploy:production') ?? ''
+    expect(body).toMatch(/test "\$CONFIRM_PRODUCTION" = "yes"/)
+  })
+
+  test('deploy:dev and deploy:staging never mention production confirmation', () => {
+    expect(blocks.get('deploy:dev') ?? '').not.toContain('CONFIRM_PRODUCTION')
+    expect(blocks.get('deploy:staging') ?? '').not.toContain('CONFIRM_PRODUCTION')
+  })
+
+  test('release:rollback routes through release-guard with an explicit image', () => {
+    const body = blocks.get('release:rollback') ?? ''
+    expect(body).toContain('release-guard')
+    expect(body).toContain('RELEASE_IMAGE: "{{.RELEASE_IMAGE}}"')
+    expect(body).toContain('--image "$RELEASE_IMAGE" --rollback')
+  })
+
+  test('release:rollback pins an explicit config (FIND-04: never implicit ./fly.toml)', () => {
+    const body = blocks.get('release:rollback') ?? ''
+    expect(body).toContain('FLY_CONFIG: "{{.FLY_CONFIG}}"')
+    expect(body).toContain('-c "$FLY_CONFIG"')
+  })
+
+  test('fly:deploy passes production confirmation through to the unified guard (F2)', () => {
+    const body = blocks.get('fly:deploy') ?? ''
+    expect(body).toContain('CONFIRM_PRODUCTION: "{{.CONFIRM_PRODUCTION}}"')
+  })
+
+  test.each(['deploy:dev', 'deploy:staging', 'deploy:production'])(
+    '%s deploys an explicit digest, never rebuilds (FIND-10)',
+    (task) => {
+      const body = blocks.get(task) ?? ''
+      expect(body).toContain('IMAGE_DIGEST: "{{.IMAGE_DIGEST}}"')
+      expect(body).toMatch(/test -n "\$IMAGE_DIGEST"/)
+      expect(body).toContain('--image "$IMAGE_DIGEST"')
+    },
+  )
+
+  test.each([
+    ['promote:staging', 'openlevel-staging', 'fly.toml', 'openlevel-dev'],
+    ['promote:production', 'openlevel-prod', 'fly.prod.toml', 'openlevel-staging'],
+  ])('%s resolves the source digest once, guards it, then deploys it (FIND-10)', (task, app, config, source) => {
+    const body = blocks.get(task) ?? ''
+    expect(body).toContain(`FLY_APP: "${app}"`)
+    expect(body).toContain(`FLY_CONFIG: "${config}"`)
+    expect(body).toContain(`SOURCE_APP: "${source}"`)
+    expect(body).toContain('resolve-deployed-digest')
+    expect(body).toContain('fly-guard')
+    // Single resolution shared by guard and deploy (no TOCTOU between them).
+    expect(body).toMatch(/DIGEST="\$\(node scripts\/toolchain\.mjs resolve-deployed-digest\)"/)
+    expect(body).toContain('IMAGE_DIGEST="$DIGEST" node scripts/toolchain.mjs fly-guard')
+    expect(body).toContain('--image "$DIGEST"')
+  })
+
+  test('promote:production keeps the double confirmation', () => {
+    const body = blocks.get('promote:production') ?? ''
+    expect(body).toMatch(/test "\$CONFIRM_DEPLOY" = "yes"/)
+    expect(body).toMatch(/test "\$CONFIRM_PRODUCTION" = "yes"/)
+  })
+
+  test('release:status is read-only (releases + status + image only)', () => {
+    const body = blocks.get('release:status') ?? ''
+    expect(body).toContain('fly releases -a "$FLY_APP"')
+    expect(body).toContain('fly status -a "$FLY_APP"')
+    expect(body).toContain('fly image show -a "$FLY_APP"')
+    expect(body).not.toMatch(/fly deploy/)
+  })
+
+  test('env:status, env:validate, and secrets:status run local-only commands', () => {
+    expect(blocks.get('env:status') ?? '').toContain('toolchain.mjs env status')
+    expect(blocks.get('env:validate') ?? '').toContain('toolchain.mjs env validate')
+    expect(blocks.get('secrets:status') ?? '').toContain('secret-store.mjs status')
+    // Command lines only (descs may name the clouds in prose).
+    const cmdLines = (task: string) =>
+      (blocks.get(task) ?? '').split('\n').filter((l) => /^\s+- /.test(l)).join('\n')
+    for (const task of ['env:status', 'env:validate', 'secrets:status']) {
+      expect(cmdLines(task)).not.toMatch(/(^|\s)(fly|neon)(\s|$)/)
+    }
+  })
+})
+
 describe('dev environment wiring (P1-1)', () => {
   test.each(['dev', 'dev:api', 'dev:web', 'dev:health', 'dev:open'])('%s maps the OPENLEVEL_* contract', (task) => {
     const body = blocks.get(task) ?? ''

@@ -11,6 +11,14 @@ export interface WorkflowEvent {
   locationId: string
   triggerType: TriggerType
   contactId: string | null
+  /**
+   * Stable identity for this logical event (FIND-07). Minted ONCE at the
+   * creation site (route/handler) via randomUUID — never per retry or per
+   * delivery — so redeliveries of the same job data deduplicate instead of
+   * re-executing. HTTP-level retries get their own key (idempotency layer);
+   * this key covers queue delivery and crash-recovery replays.
+   */
+  eventId: string
 }
 
 /**
@@ -42,6 +50,20 @@ export async function dispatchWorkflowEvent(
 
   const runs: WorkflowRun[] = []
   for (const workflow of live) {
+    // FIND-07: claim (event, workflow) atomically before running. A duplicate
+    // delivery — boss redelivery, crash-retry, or the outbox sweeper firing
+    // alongside the fast path — loses the INSERT race and skips instead of
+    // re-executing. Known edge: a crash between claim and run completion
+    // strands that run's tail (its workflow_runs row stays 'running', visible
+    // to the operator); a runs-reaper is future work, not silent duplication.
+    const claimed = await deps.db.query<{ event_id: string }>(
+      `INSERT INTO processed_events (location_id, event_id, workflow_id, trigger_type)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT DO NOTHING
+       RETURNING event_id`,
+      [event.locationId, event.eventId, workflow.id, event.triggerType],
+    )
+    if (claimed.length === 0) continue
     runs.push(
       await runWorkflow(deps, {
         locationId: event.locationId,

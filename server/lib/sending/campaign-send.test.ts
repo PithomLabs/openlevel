@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { FakeDatabase } from '../../db/fake-database'
 import type { Campaign } from '../../repos/campaigns-repo'
 import type { Contact } from '../../repos/contacts-repo'
-import { sendCampaign } from './campaign-send'
+import { sendCampaign, type RecipientStatus } from './campaign-send'
 import type { EmailSender, SmsSender } from './provider'
 
 function campaign(over: Partial<Campaign> = {}): Campaign {
@@ -205,6 +205,31 @@ describe('sendCampaign: suppression', () => {
   })
 })
 
+describe('sendCampaign: outcome callback (FIND-07)', () => {
+  it('reports every decided outcome — sent, skipped, and failed', async () => {
+    const email = emailSender()
+    const seen: [string, string][] = []
+    const d = { ...deps({ email }), onOutcome: async (contactId: string, status: RecipientStatus) => {
+      seen.push([contactId, status])
+    } }
+    const result = await sendCampaign(d, {
+      locationId: 'locA',
+      campaign: campaign(),
+      contacts: [
+        contact({ id: 'c1' }),
+        contact({ id: 'c2', emails: [] }),
+        contact({ id: 'c3', tags: ['unsubscribed'] }),
+      ],
+    })
+    expect(result.ok).toBe(true)
+    expect(seen).toEqual([
+      ['c1', 'sent'],
+      ['c2', 'skipped'],
+      ['c3', 'skipped'],
+    ])
+  })
+})
+
 describe('sendCampaign: failure isolation + throttle', () => {
   it('marks one provider failure failed and still sends the rest', async () => {
     const email = emailSender()
@@ -238,6 +263,88 @@ describe('sendCampaign: failure isolation + throttle', () => {
     })
     expect(d.sleep).toHaveBeenCalledTimes(2)
     expect(d.sleep).toHaveBeenCalledWith(250)
+  })
+})
+
+describe('sendCampaign: N5 sending marker + simulated flag', () => {
+  it('calls onSending before each provider call (never for skips), so resume can tell uncertain from untried', async () => {
+    const email = emailSender()
+    const events: string[] = []
+    email.sendEmail.mockImplementation(async (msg) => {
+      events.push(`send:${msg.to}`)
+      return { externalId: 'm1', provider: 'brevo' }
+    })
+    const d = { ...deps({ email }), onSending: vi.fn(async (id: string) => void events.push(`mark:${id}`)) }
+    await sendCampaign(d, {
+      locationId: 'locA',
+      campaign: campaign(),
+      contacts: [contact({ id: 'c1' }), contact({ id: 'c2', emails: [] })],
+    })
+    expect(d.onSending).toHaveBeenCalledTimes(1)
+    expect(d.onSending).toHaveBeenCalledWith('c1')
+    expect(events).toEqual(['mark:c1', 'send:derek@example.com'])
+  })
+
+  it('reports simulated:false for real adapters and simulated:true for the sink', async () => {
+    const real = await sendCampaign(deps({ email: emailSender() }), {
+      locationId: 'locA',
+      campaign: campaign(),
+      contacts: [contact()],
+    })
+    expect(real.ok && real.simulated).toBe(false)
+    expect(real.ok && real.sentCount).toBe(1)
+    const sink = { name: 'sink', sendEmail: vi.fn(async () => ({ externalId: 'sink-1', provider: 'sink' })) }
+    const sunk = await sendCampaign(deps({ email: sink }), {
+      locationId: 'locA',
+      campaign: campaign(),
+      contacts: [contact()],
+    })
+    expect(sunk.ok && sunk.simulated).toBe(true)
+  })
+
+  it("R13-07: sink writes are 'simulated' outcomes and never increment sentCount", async () => {
+    const sink = {
+      name: 'sink',
+      sendSms: vi.fn(async () => ({ externalId: 'sink-1', provider: 'sink' })),
+    }
+    const sunk = await sendCampaign(deps({ sms: sink }), {
+      locationId: 'locA',
+      campaign: campaign({ channel: 'sms' }),
+      contacts: [contact(), contact({ id: 'c2' })],
+    })
+    expect(sunk.ok).toBe(true)
+    if (!sunk.ok) return
+    expect(sunk.sentCount).toBe(0)
+    expect(sunk.outcomes).toHaveLength(2)
+    expect(sunk.outcomes.every((o) => o.status === 'simulated')).toBe(true)
+    const real = await sendCampaign(deps({ sms: smsSender() }), {
+      locationId: 'locA',
+      campaign: campaign({ channel: 'sms' }),
+      contacts: [contact()],
+    })
+    expect(real.ok && real.sentCount).toBe(1)
+    expect(real.ok && real.outcomes[0]?.status).toBe('sent')
+  })
+
+  it('R13-11: stops before the next attempt once shouldStop answers true (no new provider call)', async () => {
+    const email = emailSender()
+    let checks = 0
+    const d = {
+      ...deps({ email }),
+      shouldStop: vi.fn(async () => {
+        checks += 1
+        return checks > 2 // cancel lands after the 2nd recipient starts
+      }),
+    }
+    const result = await sendCampaign(d, {
+      locationId: 'locA',
+      campaign: campaign(),
+      contacts: [contact({ id: 'c1' }), contact({ id: 'c2' }), contact({ id: 'c3' }), contact({ id: 'c4' })],
+    })
+    expect(result.ok && result.cancelled).toBe(true)
+    expect(email.sendEmail).toHaveBeenCalledTimes(2)
+    expect(result.ok && result.outcomes).toHaveLength(2)
+    expect(d.shouldStop).toHaveBeenCalledTimes(3) // consulted before every recipient
   })
 })
 

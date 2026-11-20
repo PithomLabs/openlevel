@@ -8,7 +8,7 @@ const ZERO: CountValue = { count: 0, valueCents: 0 }
 
 /**
  * Dashboard summary for the current location: headline KPIs (contacts, open and
- * won opportunity value, upcoming appointments, campaign delivery) plus a
+ * won opportunity value, upcoming appointments, campaign sends) plus a
  * per-stage breakdown of the primary pipeline. Read-only; mounted behind
  * operatorAuth + locationAccess.
  *

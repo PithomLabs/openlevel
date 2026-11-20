@@ -1,0 +1,65 @@
+# OpenLevel product deploy — STAGING (openlevel-staging).
+#
+# This is the PRODUCT staging config. phase0/p2/fly.staging.toml is the
+# isolated P2 infrastructure proof and must never be a deploy target —
+# `task fly:deploy` refuses it. Conventions shared with fly.dev.toml /
+# fly.prod.toml: one image, explicit app name, APP_ENV per env, /ready
+# checks, ROLE=all, SIGTERM + 30s drain.
+#
+# Region: intentionally UNSET. The staging geography follows the first
+# pilot (V2.1 section 5) and is confirmed by the owner, who creates the
+# app with `fly apps create --region <confirmed>` (runbook
+# docs/deployment/FLY_NEON.md). Never re-add an unconfirmed region here.
+#
+# Single Machine by operating decision for staging (cost + simplicity).
+# Workflow `wait` steps are DISABLED (fail loudly, never armed — there is no
+# in-process timer constraint anymore); scale stays 1 because multi-machine
+# has NOT been proven (needs a concurrency audit), not because waits demand
+# it. Enforced with `fly scale count 1` after the first deploy (runbook).
+# Expect seconds of unavailability per deploy — never presented as
+# zero-downtime.
+#
+# Restarts: on-failure with a bounded retry budget. A clean SIGTERM drain
+# exits 0 (no restart); a crash, OOM, or failed boot exits nonzero and
+# restarts with backoff, then stays down for the operator after 10 tries
+# (fail visibly, don't burn). Same P2-verified [[restart]] shape.
+
+app = "openlevel-staging"
+
+# Top-level process keys live HERE, before the first [section]: TOML assigns
+# every key to the most recent table header, so kill_* placed lower would
+# silently nest inside [env] or [[restart]] instead of configuring the app.
+kill_signal = "SIGTERM"
+kill_timeout = "30s"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[deploy]
+  strategy = "rolling"
+  # Versioned migrations (dbmate baseline from the audited schema). Runs
+  # against the new image before it takes traffic; a failed migration fails
+  # the release. Logs are credential-free. No seed ever runs here.
+  release_command = "npm run db:migrate:release"
+
+[http_service]
+  internal_port = 8790
+  force_https = true
+  auto_stop_machines = "off"
+  min_machines_running = 1
+  [[http_service.checks]]
+    # Readiness (lifecycle + live DB ping), not bare liveness: an instance
+    # that cannot serve must leave rotation even while its loop still turns.
+    path = "/ready"
+    interval = "15s"
+    timeout = "5s"
+
+[env]
+  NODE_ENV = "production"
+  APP_ENV = "staging"
+  ROLE = "all"
+  PORT = "8790"
+
+[[restart]]
+  policy = "on-failure"
+  retries = 10

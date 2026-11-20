@@ -81,6 +81,11 @@ export async function seedDatabase(db: Database): Promise<void> {
         // approve and every action tool is withheld. The agent block under it is
         // what the AI Agent settings page reads and writes.
         replyMode: 'approve-first',
+        // Inference provenance (R14-12): the demo tenant IS synthetic by
+        // construction (fictional 555 numbers, invented people), so the seed
+        // attests it. Restoring real data here never attests — attestation
+        // is this deliberate write only.
+        syntheticAttested: true,
         agent: {
           enabled: true,
           persona:
@@ -168,7 +173,7 @@ export async function seedDatabase(db: Database): Promise<void> {
   ]
 
   for (const t of seedThreads) {
-    const contact = await contacts.upsertByMatch({ name: t.name, phone: t.phone }, 'seed')
+    const { contact } = await contacts.upsertByMatch({ name: t.name, phone: t.phone }, 'seed')
     contactIdByName[t.name] = contact.id
     const conversation = await conversations.upsertByExternal({
       provider: 'chatwoot',
@@ -1965,16 +1970,29 @@ export async function seedDatabase(db: Database): Promise<void> {
 }
 
 // Run directly (`npm run seed`) against DATABASE_URL; import-safe for dev-server.
+// The loopback check lives HERE, not just in the Taskfile guard: a direct
+// `npx tsx db/seed.ts` with a remote DATABASE_URL must refuse (Review 11 P2).
 const entry = process.argv[1]
 if (entry && import.meta.url === pathToFileURL(entry).href) {
+  const { assertLoopbackDatabaseUrl } = await import('../server/lib/db-identity')
+  const { reportError } = await import('../server/lib/secrets')
   const url = process.env.DATABASE_URL
   if (!url) throw new Error('DATABASE_URL required to seed')
-  const { Pool } = await import('pg')
-  const { PgDatabase } = await import('../server/db/database')
-  const pool = new Pool({ connectionString: url })
-  await seedDatabase(new PgDatabase(pool))
-  console.log('openlevel: seeded demo tenant (admin@acmecorp.com / openlevel)')
-  await pool.end()
+  try {
+    assertLoopbackDatabaseUrl(url)
+    const { Pool } = await import('pg')
+    const { PgDatabase } = await import('../server/db/database')
+    const pool = new Pool({ connectionString: url })
+    try {
+      await seedDatabase(new PgDatabase(pool))
+      console.log('openlevel: seeded demo tenant (admin@acmecorp.com / openlevel)')
+    } finally {
+      await pool.end()
+    }
+  } catch (err) {
+    reportError('seed', err)
+    process.exit(1)
+  }
 }
 
 

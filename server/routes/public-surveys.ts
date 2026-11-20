@@ -3,11 +3,20 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import type { AppEnv } from '../app-env'
 import type { Database } from '../db/database'
-import type { WorkflowDispatch } from '../jobs/workflow-dispatcher'
+import type { WorkflowDispatch, WorkflowEvent } from '../jobs/workflow-dispatcher'
+import {
+  IdempotencyConflict,
+  IdempotencyInProgress,
+  InvalidIdempotencyKey,
+  completeIdempotencyKey,
+  parseIdempotencyKey,
+  withIdempotency,
+} from '../lib/idempotency'
 import { readAllFields } from '../lib/page-html'
 import { renderSurveyNotFound, renderSurveyPage } from '../lib/survey-page'
 import { ContactsRepo } from '../repos/contacts-repo'
 import { LocationsRepo } from '../repos/locations-repo'
+import { OutboxRepo } from '../repos/outbox-repo'
 import { SurveySubmissionsRepo } from '../repos/survey-submissions-repo'
 import { SurveysRepo } from '../repos/surveys-repo'
 import { TimelineRepo } from '../repos/timeline-repo'
@@ -72,43 +81,95 @@ export function publicSurveysRoute(deps: {
       }
     }
 
-    // Capture the lead. Known field names map onto contact identity; the full
-    // raw answers map is preserved on the stored submission below.
-    const contactsRepo = new ContactsRepo(deps.db, loc)
-    const contact = await contactsRepo.upsertByMatch(
-      {
-        name: values.full_name ?? values.name,
-        email: values.email,
-        phone: values.phone,
-      },
-      `survey:${slug}`,
-    )
+    // Submission identity (R14-01, approval G3): an explicit Idempotency-Key
+    // makes a retry one logical submission. WITHOUT a key every submit
+    // executes — surveys are answered repeatedly, and two identical answer
+    // sets stay two distinct responses. No content-derived fallback:
+    // payload equality must never collapse surveys. API contract: clients
+    // needing retry safety MUST supply a stable key.
+    const keyHeader = c.req.header('Idempotency-Key')
+    const capture = async (tx: Database) => {
+      // Capture the lead. Known field names map onto contact identity; the full
+      // raw answers map is preserved on the stored submission below.
+      const contactsRepo = new ContactsRepo(tx, loc)
+      const { contact, created } = await contactsRepo.upsertByMatch(
+        {
+          name: values.full_name ?? values.name,
+          email: values.email,
+          phone: values.phone,
+        },
+        `survey:${slug}`,
+      )
 
-    const tag = typeof survey.content.tag === 'string' ? survey.content.tag : undefined
-    if (tag) await contactsRepo.addTag(contact.id, tag)
+      const tag = typeof survey.content.tag === 'string' ? survey.content.tag : undefined
+      if (tag) await contactsRepo.addTag(contact.id, tag)
 
-    // STORE the raw answers — the operator submissions viewer reads these back.
-    await new SurveySubmissionsRepo(deps.db, loc).create({
-      surveyId: survey.id,
-      contactId: contact.id,
-      values,
-    })
+      // STORE the raw answers — the operator submissions viewer reads these back.
+      const submission = await new SurveySubmissionsRepo(tx, loc).create({
+        surveyId: survey.id,
+        contactId: contact.id,
+        values,
+      })
 
-    await surveysRepo.incrementSubmissions(survey.id)
-    await new TimelineRepo(deps.db, loc).add({
-      contactId: contact.id,
-      type: 'survey_submission',
-      refTable: 'surveys',
-      refId: survey.id,
-      payload: { survey: slug },
-    })
+      await new SurveysRepo(tx, loc).incrementSubmissions(survey.id)
+      await new TimelineRepo(tx, loc).add({
+        contactId: contact.id,
+        type: 'survey_submission',
+        refTable: 'surveys',
+        refId: survey.id,
+        payload: { survey: slug },
+      })
 
-    // Drive the capture → automation loop: a completed survey can start its own
-    // dedicated workflow AND the generic new-contact ones.
-    await deps.dispatch?.({ locationId: loc, triggerType: 'survey_submitted', contactId: contact.id })
-    await deps.dispatch?.({ locationId: loc, triggerType: 'contact_created', contactId: contact.id })
-
-    return c.json({ ok: true, contactId: contact.id })
+      // Automation intents commit WITH the capture under STABLE event ids;
+      // fast dispatch below fires post-commit and the sweeper covers a crash
+      // between them. Redelivery converges.
+      const events: WorkflowEvent[] = []
+      const queue = async (eventId: string, triggerType: 'survey_submitted' | 'contact_created', aggregateId: string) => {
+        await new OutboxRepo(tx, loc).insert({
+          id: eventId,
+          aggregate: triggerType === 'survey_submitted' ? 'survey_submission' : 'contact',
+          aggregateId,
+          event: triggerType,
+          payload: { contactId: contact.id },
+        })
+        events.push({ locationId: loc, triggerType, contactId: contact.id, eventId })
+      }
+      await queue(`survey-submitted:${submission.id}`, 'survey_submitted', submission.id)
+      if (created) await queue(`contact-created:${contact.id}`, 'contact_created', contact.id)
+      return { out: { contactId: contact.id }, events }
+    }
+    try {
+      const key = parseIdempotencyKey(keyHeader)
+      const scope = { locationId: loc, operation: 'survey-submit', key: key ?? '', payload: { slug, values } }
+      const settled = key
+        ? await withIdempotency(deps.db, scope, () =>
+            deps.db.withTransaction(async (tx) => {
+              const result = await capture(tx)
+              await completeIdempotencyKey(tx, scope, result)
+              return result
+            }),
+          )
+        : { result: await deps.db.withTransaction(capture), reused: false }
+      if (!settled.reused) {
+        for (const event of settled.result.events) {
+          try {
+            await deps.dispatch?.(event)
+          } catch {
+            // Best-effort: the outbox intent committed, so the sweeper delivers
+            // what this misses. Never fail the capture for a dispatch fault.
+          }
+        }
+      }
+      return c.json({ ok: true, ...settled.result.out, ...(settled.reused ? { deduped: true } : {}) })
+    } catch (err) {
+      if (err instanceof InvalidIdempotencyKey) {
+        return c.json({ error: err.message }, 400)
+      }
+      if (err instanceof IdempotencyConflict || err instanceof IdempotencyInProgress) {
+        return c.json({ error: err.message }, 409)
+      }
+      throw err
+    }
   })
 
   return app

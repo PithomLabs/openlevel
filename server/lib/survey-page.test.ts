@@ -173,3 +173,13 @@ test('renderSurveyNotFound returns a styled html 404 document', () => {
   expect(html).toContain('<!doctype html>')
   expect(html.toLowerCase()).toContain('not found')
 })
+
+// --- submission identity --------------------------------------------------
+
+test('R14-01: survey script sends a persisted Idempotency-Key per response', () => {
+  const html = renderSurveyPage(survey)
+  expect(html).toContain('Idempotency-Key')
+  expect(html).toContain('sessionStorage')
+  expect(html).toContain('randomUUID')
+  expect(html).toContain('removeItem')
+})

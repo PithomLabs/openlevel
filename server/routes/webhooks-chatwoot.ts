@@ -1,12 +1,13 @@
-import { createHash, timingSafeEqual } from 'node:crypto'
+import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import { Hono } from 'hono'
 import type { Database } from '../db/database'
+import type { WorkflowDispatch } from '../jobs/workflow-dispatcher'
 import { ChannelLinksRepo } from '../repos/channel-links-repo'
 import { ContactsRepo } from '../repos/contacts-repo'
 import { ConversationsRepo } from '../repos/conversations-repo'
 import { MessagesRepo } from '../repos/messages-repo'
 import { TimelineRepo } from '../repos/timeline-repo'
-import { parseChatwootEvent } from '../lib/chatwoot-inbound'
+import { type ChatwootWebhookPayload, parseChatwootEvent } from '../lib/chatwoot-inbound'
 
 /**
  * Constant-time secret check. A plain `a !== b` short-circuits on the first
@@ -18,6 +19,27 @@ import { parseChatwootEvent } from '../lib/chatwoot-inbound'
  * time independent of where the inputs first differ.
  */
 function secretsMatch(provided: string, expected: string): boolean {
+  const a = createHash('sha256').update(provided).digest()
+  const b = createHash('sha256').update(expected).digest()
+  return timingSafeEqual(a, b)
+}
+
+/** Replay window for Chatwoot's signed timestamp (Review 11 G6). */
+const SIGNATURE_FRESHNESS_MS = 300_000
+
+/**
+ * Verify Chatwoot's native webhook signature (per Chatwoot's documented
+ * scheme): `X-Chatwoot-Signature: sha256=HMAC-SHA256(secret, ts + "." + rawBody)`.
+ * Compared through the same length-hiding digest trick as secretsMatch.
+ */
+export function chatwootSignatureValid(
+  webhookSecret: string,
+  timestamp: string,
+  rawBody: string,
+  provided: string,
+): boolean {
+  if (provided === '' || !/^\d+$/.test(timestamp)) return false
+  const expected = `sha256=${createHmac('sha256', webhookSecret).update(`${timestamp}.${rawBody}`).digest('hex')}`
   const a = createHash('sha256').update(provided).digest()
   const b = createHash('sha256').update(expected).digest()
   return timingSafeEqual(a, b)
@@ -39,19 +61,39 @@ export interface ChatwootWebhookDeps {
   webhookSecret: string
   /** Optional hook (Phase E): enqueue agent.reply.dispatch after a fresh inbound. */
   onInbound?: (e: InboundEvent) => void | Promise<void>
+  /** Fires contact_created for genuinely new inbound contacts (FIND-07). */
+  dispatch?: WorkflowDispatch
+  /** Injectable wall clock (epoch ms) for signature freshness; tests pin it. */
+  now?: () => number
 }
 
 export function chatwootWebhookRoute(deps: ChatwootWebhookDeps): Hono {
   const app = new Hono()
 
   app.post('/', async (c) => {
-    // Prefer the header: a query-string secret rides in the URL and can land in
-    // reverse-proxy access logs. We still accept ?secret= because Chatwoot's
-    // generic webhook cannot send a custom header, so the URL is its only channel.
-    const provided = c.req.header('x-webhook-secret') ?? c.req.query('secret') ?? ''
-    if (!secretsMatch(provided, deps.webhookSecret)) return c.json({ error: 'unauthorized' }, 401)
+    // Header-only authentication (Review 11 G6). ?secret= was removed: a URL
+    // secret lands in proxy access logs and Fly offers no query scrubbing,
+    // so no redaction story could cover it. Two accepted paths: our shared
+    // header (relays/self-hosted setups that can set it), or Chatwoot's own
+    // HMAC signature over timestamp + raw body. Either must verify fully.
+    const rawBody = await c.req.text()
+    const headerOk = secretsMatch(c.req.header('x-webhook-secret') ?? '', deps.webhookSecret)
+    const timestamp = c.req.header('x-chatwoot-timestamp') ?? ''
+    const signature = c.req.header('x-chatwoot-signature') ?? ''
+    const now = deps.now?.() ?? Date.now()
+    const fresh =
+      /^\d+$/.test(timestamp) && Math.abs(now - Number(timestamp) * 1000) <= SIGNATURE_FRESHNESS_MS
+    const sigOk =
+      signature !== '' && fresh && chatwootSignatureValid(deps.webhookSecret, timestamp, rawBody, signature)
+    if (!headerOk && !sigOk) return c.json({ error: 'unauthorized' }, 401)
 
-    const payload = await c.req.json().catch(() => null)
+    const payload: ChatwootWebhookPayload | null = (() => {
+      try {
+        return JSON.parse(rawBody) as ChatwootWebhookPayload
+      } catch {
+        return null
+      }
+    })()
     const event = payload ? parseChatwootEvent(payload) : null
     if (!event) return c.json({ ignored: true }, 200)
 
@@ -59,7 +101,7 @@ export function chatwootWebhookRoute(deps: ChatwootWebhookDeps): Hono {
     if (!channel) return c.json({ ignored: 'no channel link' }, 200)
     const loc = channel.locationId
 
-    const contact = await new ContactsRepo(deps.db, loc).upsertByMatch(event.contact, 'chatwoot')
+    const { contact, created } = await new ContactsRepo(deps.db, loc).upsertByMatch(event.contact, 'chatwoot')
     const conversations = new ConversationsRepo(deps.db, loc)
     const conversation = await conversations.upsertByExternal({
       provider: 'chatwoot',
@@ -85,6 +127,18 @@ export function chatwootWebhookRoute(deps: ChatwootWebhookDeps): Hono {
       payload: { direction: 'inbound', body: event.body, channel: 'chatwoot' },
     })
     await conversations.touch(conversation.id)
+
+    // Entry convergence (FIND-07): an inbound from a brand-new contact also
+    // fires contact_created (deduped downstream by event_id), so welcome
+    // automations treat every capture path the same.
+    if (created) {
+      await deps.dispatch?.({
+        locationId: loc,
+        triggerType: 'contact_created',
+        contactId: contact.id,
+        eventId: randomUUID(),
+      })
+    }
 
     if (deps.onInbound) {
       await deps.onInbound({

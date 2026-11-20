@@ -15,5 +15,5 @@
     "lib": ["ES2023"],
     "noEmit": true
   },
-  "include": ["scripts", "vite.config.ts"]
+  "include": ["scripts", "vite.config.ts", "db/vitest-provided.d.ts"]
 }

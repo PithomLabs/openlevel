@@ -4,7 +4,14 @@ import { z } from 'zod'
 import type { AppEnv } from '../app-env'
 import type { Database } from '../db/database'
 import type { ClaudeClient } from '../jobs/agent-reply'
+import type { WorkflowDispatch } from '../jobs/workflow-dispatcher'
 import { runOperatorAssistant } from '../lib/operator-assistant'
+import {
+  IdempotencyConflict,
+  IdempotencyInProgress,
+  InvalidIdempotencyKey,
+  parseIdempotencyKey,
+} from '../lib/idempotency'
 import { confirmOperatorWrite, type SendTextFn } from '../lib/operator-tools'
 import { resolveSecret } from '../lib/vault'
 
@@ -29,6 +36,8 @@ export interface AssistantRouteDeps {
   /** The gateway text rail, passed through to /confirm's send_text. Absent =
    *  texting not wired up; confirming a send_text honestly reports "not set up". */
   sendText?: SendTextFn
+  /** Fires appointment_booked for operator-confirmed bookings (FIND-07). */
+  dispatch?: WorkflowDispatch
 }
 
 const turnSchema = z.object({ role: z.enum(['operator', 'assistant']), content: z.string() })
@@ -60,9 +69,27 @@ export function assistantRoute(deps: AssistantRouteDeps): Hono<AppEnv> {
   app.post('/confirm', zValidator('json', confirmSchema), async (c) => {
     const loc = c.get('locationId')
     const { verb, params } = c.req.valid('json')
-    const result = await confirmOperatorWrite({ db: deps.db, locationId: loc, sendText: deps.sendText }, { verb, params })
-    if (!result.ok) return c.json({ error: result.message }, result.status)
-    return c.json({ message: result.message })
+    const keyHeader = c.req.header('Idempotency-Key')
+    try {
+      const key = parseIdempotencyKey(keyHeader)
+      const result = await confirmOperatorWrite(
+        { db: deps.db, locationId: loc, sendText: deps.sendText, dispatch: deps.dispatch, actor: c.get('operatorId') },
+        { verb, params },
+        key === null ? undefined : { idempotencyKey: key },
+      )
+      if (!result.ok) return c.json({ error: result.message }, result.status)
+      return c.json({ message: result.message })
+    } catch (err) {
+      if (err instanceof InvalidIdempotencyKey) {
+        return c.json({ error: err.message }, 400)
+      }
+      // Same key, different proposal/actor (or a racing twin): honest 409,
+      // never a second write. Without a key the execute-once path applies.
+      if (err instanceof IdempotencyConflict || err instanceof IdempotencyInProgress) {
+        return c.json({ error: err.message }, 409)
+      }
+      throw err
+    }
   })
 
   return app

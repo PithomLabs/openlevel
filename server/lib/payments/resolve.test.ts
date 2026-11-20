@@ -80,4 +80,47 @@ describe('resolvePaymentProvider', () => {
     const resolved = await resolvePaymentProvider(db, 'nope')
     expect(resolved).toEqual({ ok: false, reason: 'location not found' })
   })
+
+  it('staging refuses live stripe keys but allows test keys', async () => {
+    process.env.ACME_STRIPE_SECRET_KEY = 'sk_live_abc'
+    process.env.ACME_STRIPE_WEBHOOK_SECRET = 'whsec_x'
+    const staging = { APP_ENV: 'staging' }
+    expect(await resolvePaymentProvider(dbWithLocation({ payments: { provider: 'stripe' } }), 'locA', staging)).toEqual(
+      { ok: false, reason: 'live stripe keys are refused in staging (use a test key)' },
+    )
+    process.env.ACME_STRIPE_SECRET_KEY = 'sk_test_abc'
+    const allowed = await resolvePaymentProvider(dbWithLocation({ payments: { provider: 'stripe' } }), 'locA', staging)
+    expect(allowed.ok && allowed.provider.name).toBe('stripe')
+  })
+
+  it('staging refuses square entirely (no verifiable sandbox mode)', async () => {
+    process.env.ACME_SQUARE_ACCESS_TOKEN = 'EAAA-live'
+    process.env.ACME_SQUARE_WEBHOOK_SIGNATURE_KEY = 'sig'
+    const resolved = await resolvePaymentProvider(
+      dbWithLocation({ payments: { provider: 'square', squareLocationId: 'L1' } }),
+      'locA',
+      { APP_ENV: 'staging' },
+    )
+    expect(resolved).toEqual({ ok: false, reason: 'square is disabled in staging (no verifiable sandbox mode)' })
+  })
+
+  it('R14-03: restricted production preview refuses every payment provider, even test keys', async () => {
+    process.env.ACME_STRIPE_SECRET_KEY = 'sk_test_abc'
+    process.env.ACME_STRIPE_WEBHOOK_SECRET = 'whsec_x'
+    const preview = { APP_ENV: 'production', RESTRICTED_PREVIEW: 'true' }
+    const stripe = await resolvePaymentProvider(
+      dbWithLocation({ payments: { provider: 'stripe' } }),
+      'locA',
+      preview,
+    )
+    expect(stripe.ok).toBe(false)
+    process.env.ACME_SQUARE_ACCESS_TOKEN = 'EAAA-sandbox'
+    process.env.ACME_SQUARE_WEBHOOK_SIGNATURE_KEY = 'sig'
+    const square = await resolvePaymentProvider(
+      dbWithLocation({ payments: { provider: 'square', squareLocationId: 'L1' } }),
+      'locA',
+      preview,
+    )
+    expect(square.ok).toBe(false)
+  })
 })

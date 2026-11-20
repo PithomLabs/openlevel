@@ -12,9 +12,11 @@ selected on the hosts set up so far. Companion to the executable logic in
   matrix. Never EOL, beta, RC, development, or odd-numbered Current builds
   as defaults.
 - OpenLevel's runtime contract is fixed: `package.json` engines `node
-  >=22.0.0`, CI pins Node 22, CI PostgreSQL stays 16.16. No host workaround
-  may change engines, CI pins, or application dependencies (`npm ci` only;
-  no `npm update`, no lockfile regeneration for workstation setup).
+  >=26.0.0`, CI pins Node 26, Phase 0 proof PostgreSQL stays digest-pinned
+  16.16 while the product image job uses the current stable PG (18.7). No
+  host workaround may change engines, CI pins, or application dependencies
+  (`npm ci` only; no `npm update`, no lockfile regeneration for workstation
+  setup).
 - Homebrew is optional, never mandatory. Older macOS and Intel Macs sit
   outside Homebrew's fully supported tier: prefer supported native packages
   or official per-user binaries there; never force source builds.
@@ -43,15 +45,14 @@ Status vocabulary used by `tools:install` and reports: `INSTALLED`,
 
 Per-tool rules:
 
-- Node 22 (REQUIRED): latest 22.x patch compatible with the host, via the
-  existing manager else a cross-platform one (e.g. fnm). macOS floor 11+
-  covers Monterey 12 on x64/arm64; Linux Tier 1 needs glibc >=2.28.
-  `.nvmrc` pins 22; fresh shells must resolve 22 in this repo. If no
-  supported Node 22 runs on a host: BLOCKED, upgrade the host — never lower
+- Node 26 (REQUIRED): latest 26.x patch compatible with the host, via the
+  existing manager else a cross-platform one (e.g. fnm). Node 26 Active LTS
+  binaries need macOS 13.5+; Linux Tier 1 needs glibc >=2.28.
+  `.nvmrc` pins 26; fresh shells must resolve 26 in this repo. If no
+  supported Node 26 runs on a host: BLOCKED, upgrade the host — never lower
   the requirement.
-- Node latest LTS (OPTIONAL): install alongside 22 only where the published
-  binary floor allows (Active LTS needs macOS 13.5+; skip on Monterey).
-  Never the repo runtime.
+- Node newer Current (OPTIONAL): install alongside 26 only for evaluation
+  where the published binary floor allows. Never the repo runtime.
 - PostgreSQL (see safeguard above): newest stable major+patch with official
   support for the exact OS/arch. macOS: EDB installer line whose matrix
   covers the host (PG17 line on Monterey 12, PG18 where 13+); alternatives
@@ -61,17 +62,43 @@ Per-tool rules:
   `~/.local/bin` (inspect the script; release checksum verified).
 - Fly CLI (`fly`): official installer or release asset into `~/.local/bin`
   (inspect; verify checksum/signature when published). Never auth/deploy.
-- Neon CLI (`neon`): `npm install --global neon@latest` under Node 22 (needs
+- Neon CLI (`neon`): `npm install --global neon@latest` under Node 26 (needs
   Node >=20.19), else the exact OS/arch standalone binary with integrity
   check. Never auth/init/link/env-pull.
 
 Official sources (re-check live before installing):
-Node releases, Node v22.x + main BUILDING.md, Homebrew support tiers,
+Node releases, Node v26.x + main BUILDING.md, Homebrew support tiers,
 PostgreSQL macOS/Linux download matrices, Task installation + platforms
 guides, Fly flyctl installation, Neon CLI docs + npm package page.
 `task tools:plan` prints the exact URLs.
 
-## Host record — MacBookAir7,1 (2026-11-16)
+## Runtime-contract change (2026-11-19)
+
+The repo runtime moved from Node 22 to Node 26 Active LTS (engines
+`>=26.0.0`, `.nvmrc` 26, CI 26, both Dockerfiles `node:26-slim`) after the
+full gate passed under v26.13.1: app suite 1665 passed + the 1 pinned
+baseline vault failure, `test:phase0:unit` 287/287, both typechecks, and
+`vite build`. The MacBookAir7,1 record below is therefore historical:
+Monterey 12 cannot run Node 26 binaries (macOS 13.5+ floor), so that host
+is BLOCKED until upgraded — per policy the requirement is never lowered.
+Phase 0 proof PostgreSQL stays digest-pinned 16.16 (P2 container-identity
+evidence); only the product image job targets the current stable PG 18.7.
+
+## Host record — Linux workstation (2026-11-19)
+
+Detected: Linux x64, glibc 2.39, nvm with Node v24.13.1 active, psql 16.14
+client with no local server cluster, Docker with `postgres:18.6-alpine`
+cached, flyctl + neon CLIs present (no auth).
+
+Selected: Node v26.13.1 "Lithium" (Active LTS since 2026-10-28) via the
+existing nvm manager; `npm ci` reinstalled under 26; no local PostgreSQL
+server installed (PGlite covers app dev, ephemeral containers cover
+PG-backed verification); `postgres:18.7` + `node:26-slim` pulled for the
+product image and migration validation. Owner action to finish the
+workstation switch: `nvm use 26` (or `nvm alias default 26`) inside the
+checkout; `task doctor` then reports the runtime OK instead of WARN/FAIL.
+
+## Host record — MacBookAir7,1 (2026-11-16, historical)
 
 Detected: macOS 12.7.6 Monterey, Intel x86_64, CLT installed, bash with
 `~/.local/bin` on PATH. No brew, MacPorts, Node manager, node, psql, task,

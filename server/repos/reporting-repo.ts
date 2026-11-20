@@ -34,7 +34,7 @@ export interface CampaignTotals {
 export class ReportingRepo extends LocationScopedRepo {
   async contactCount(): Promise<number> {
     const rows = await this.db.query<{ count: number | string }>(
-      'SELECT count(*)::int AS count FROM contacts WHERE location_id = $1',
+      'SELECT count(*)::int AS count FROM contacts WHERE location_id = $1 AND archived_at IS NULL',
       [this.locationId],
     )
     return Number(rows[0]?.count ?? 0)

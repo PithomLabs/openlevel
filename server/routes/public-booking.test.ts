@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { PGlite } from '@electric-sql/pglite'
 import { Hono } from 'hono'
 import type { AppEnv } from '../app-env'
+import type { Database } from '../db/database'
 import { PgliteDatabase } from '../db/pglite-database'
 import { dispatchWorkflowEvent } from '../jobs/workflow-dispatcher'
 import { AppointmentsRepo } from '../repos/appointments-repo'
@@ -59,7 +60,7 @@ async function setup() {
   ])
 
   const dispatch = async (e: Parameters<typeof dispatchWorkflowEvent>[1]) => {
-    await dispatchWorkflowEvent({ db }, e)
+    await dispatchWorkflowEvent({ db, waitsEnabled: true }, e)
   }
   const app = new Hono<AppEnv>()
   app.route('/', publicBookingRoute({ db, dispatch, now: () => NOW }))
@@ -173,6 +174,27 @@ test('POST book reserves the slot: creates a contact + appointment, logs it, run
 
 test('POST book is 409 when the slot was taken in the meantime (double-book guard)', async () => {
   const { app } = await setup()
+  const book = (email: string) =>
+    app.request('/loc_test/cash-offer/book', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        start: FIRST_SLOT,
+        end: '2025-06-09T13:30:00.000Z',
+        name: 'Visitor',
+        email,
+      }),
+    })
+
+  expect((await book('first@example.com')).status).toBe(200)
+  // A DIFFERENT visitor (different idempotency identity) meets the guard.
+  const second = await book('second@example.com')
+  expect(second.status).toBe(409)
+  expect((await second.json()).error).toBe('slot taken')
+})
+
+test('POST book retry-after-success replays instead of double-booking (FIND-09)', async () => {
+  const { app, db } = await setup()
   const book = () =>
     app.request('/loc_test/cash-offer/book', {
       method: 'POST',
@@ -180,15 +202,205 @@ test('POST book is 409 when the slot was taken in the meantime (double-book guar
       body: JSON.stringify({
         start: FIRST_SLOT,
         end: '2025-06-09T13:30:00.000Z',
-        name: 'First Come',
-        email: 'first@example.com',
+        name: 'Olivia Reed',
+        email: 'olivia@example.com',
       }),
     })
 
-  expect((await book()).status).toBe(200)
-  const second = await book()
-  expect(second.status).toBe(409)
-  expect((await second.json()).error).toBe('slot taken')
+  const first = await book()
+  expect(first.status).toBe(200)
+  const firstBody = (await first.json()) as { appointmentId: string; contactId: string }
+  const retry = await book()
+  expect(retry.status).toBe(200)
+  // Same recorded result, honestly flagged as a replay.
+  expect(await retry.json()).toMatchObject({
+    ok: true,
+    appointmentId: firstBody.appointmentId,
+    contactId: firstBody.contactId,
+    deduped: true,
+  })
+  // Exactly one of everything — no duplicate writes on replay.
+  const counts = await db.query<{ n: number }>(
+    'SELECT (SELECT count(*) FROM appointments)::int + (SELECT count(*) FROM timeline_events)::int + (SELECT count(*) FROM outbox)::int AS n',
+  )
+  expect(counts[0]?.n).toBe(3)
+})
+
+test('POST book honors an explicit Idempotency-Key and conflicts on reuse (FIND-09)', async () => {
+  const { app } = await setup()
+  const book = (headers: Record<string, string>, email: string) =>
+    app.request('/loc_test/cash-offer/book', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify({ start: FIRST_SLOT, end: '2025-06-09T13:30:00.000Z', name: 'N', email }),
+    })
+
+  const first = await book({ 'Idempotency-Key': 'key-1' }, 'a@example.com')
+  expect(first.status).toBe(200)
+  const replay = await book({ 'Idempotency-Key': 'key-1' }, 'a@example.com')
+  expect(replay.status).toBe(200)
+  expect(await replay.json()).toMatchObject({ deduped: true })
+  // Same key, different payload: conflict, never silent reuse.
+  const clash = await book({ 'Idempotency-Key': 'key-1' }, 'b@example.com')
+  expect(clash.status).toBe(409)
+  expect(await clash.json()).toMatchObject({ error: expect.stringMatching(/different .* payload/) })
+})
+
+test('POST book writes an outbox row whose id doubles as the dispatch event id (FIND-09)', async () => {
+  const { app, db } = await setup()
+  const res = await app.request('/loc_test/cash-offer/book', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      start: FIRST_SLOT,
+      end: '2025-06-09T13:30:00.000Z',
+      name: 'Olivia Reed',
+      email: 'olivia@example.com',
+    }),
+  })
+  expect(res.status).toBe(200)
+  const body = (await res.json()) as { appointmentId: string; contactId: string }
+  const rows = await db.query<{ id: string; status: string; event: string }>(
+    'SELECT id, status, event FROM outbox',
+  )
+  expect(rows).toHaveLength(1)
+  expect(rows[0]).toMatchObject({ id: `booking:${body.appointmentId}`, status: 'pending', event: 'appointment_booked' })
+  // The fast-path dispatch fired with that same stable id (visible via the claim).
+  const claims = await db.query<{ event_id: string }>('SELECT event_id FROM processed_events')
+  expect(claims.map((r) => r.event_id)).toContain(`booking:${body.appointmentId}`)
+})
+
+/**
+ * Fails the first query matching `pattern`, then behaves. Proves atomicity.
+ * Counter is shared across the transaction view so faults trigger inside the
+ * unit under test, not just around it.
+ */
+class FlakyDb implements Database {
+  constructor(
+    private inner: Database,
+    private pattern: RegExp,
+    private state = { left: 1 },
+  ) {}
+  async query<T = unknown>(sql: string, params: unknown[] = []): Promise<T[]> {
+    if (this.state.left > 0 && this.pattern.test(sql)) {
+      this.state.left -= 1
+      throw new Error('injected fault')
+    }
+    return this.inner.query<T>(sql, params)
+  }
+  withTransaction<T>(fn: (db: Database) => Promise<T>): Promise<T> {
+    return this.inner.withTransaction((tx) => fn(new FlakyDb(tx, this.pattern, this.state)))
+  }
+}
+
+test.each([
+  ['contact write', /INSERT INTO contacts/],
+  ['appointment write', /INSERT INTO appointments/],
+  ['timeline write', /INSERT INTO timeline_events/],
+  ['outbox write', /INSERT INTO outbox/],
+])('POST book fault at %s rolls everything back and releases the key (FIND-09)', async (_label, pattern) => {
+  const { db, app: _ignored } = await setup()
+  const flaky = new FlakyDb(db, pattern)
+  const app = new Hono<AppEnv>()
+  app.route(
+    '/',
+    publicBookingRoute({
+      db: flaky,
+      dispatch: async (e) => {
+        await dispatchWorkflowEvent({ db, waitsEnabled: true }, e)
+      },
+      now: () => NOW,
+    }),
+  )
+  const book = () =>
+    app.request('/loc_test/cash-offer/book', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        start: FIRST_SLOT,
+        end: '2025-06-09T13:30:00.000Z',
+        name: 'Olivia Reed',
+        email: 'olivia@example.com',
+      }),
+    })
+
+  const res = await book()
+  expect(res.status).toBe(500)
+  // Nothing committed anywhere: no contact, no appointment, no timeline, no outbox.
+  const counts = await db.query<{ n: number }>(
+    'SELECT (SELECT count(*) FROM contacts)::int + (SELECT count(*) FROM appointments)::int + (SELECT count(*) FROM timeline_events)::int + (SELECT count(*) FROM outbox)::int AS n',
+  )
+  expect(counts[0]?.n).toBe(0)
+  // The key was released: the retry (fault spent) books cleanly.
+  const retry = await book()
+  expect(retry.status).toBe(200)
+})
+
+/**
+ * N4: faults the completion UPDATE only when issued OUTSIDE a transaction.
+ * The booking transaction itself is unfaulted — so the request succeeds if
+ * and only if idempotency completion commits atomically with the booking.
+ */
+class OuterFaultDb implements Database {
+  constructor(
+    private inner: Database,
+    private pattern: RegExp,
+    private state = { left: 1 },
+  ) {}
+  async query<T = unknown>(sql: string, params: unknown[] = []): Promise<T[]> {
+    if (this.state.left > 0 && this.pattern.test(sql)) {
+      this.state.left -= 1
+      throw new Error('injected post-commit fault')
+    }
+    return this.inner.query<T>(sql, params)
+  }
+  withTransaction<T>(fn: (db: Database) => Promise<T>): Promise<T> {
+    return this.inner.withTransaction(fn)
+  }
+}
+
+test('N4: booking completion is atomic with the booking — a post-commit crash cannot wedge the key', async () => {
+  const { db, app: _ignored } = await setup()
+  const faulted = new OuterFaultDb(db, /UPDATE idempotency_keys SET status = 'completed'/)
+  const app = new Hono<AppEnv>()
+  app.route(
+    '/',
+    publicBookingRoute({
+      db: faulted,
+      dispatch: async (e) => {
+        await dispatchWorkflowEvent({ db, waitsEnabled: true }, e)
+      },
+      now: () => NOW,
+    }),
+  )
+  const book = () =>
+    app.request('/loc_test/cash-offer/book', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': 'n4probe-key-1' },
+      body: JSON.stringify({
+        start: FIRST_SLOT,
+        end: '2025-06-09T13:30:00.000Z',
+        name: 'Olivia Reed',
+        email: 'olivia@example.com',
+      }),
+    })
+
+  // The completion UPDATE never escapes the transaction, so the injected
+  // post-commit fault cannot fire: the booking succeeds despite it.
+  const res = await book()
+  expect(res.status).toBe(200)
+  const body = (await res.json()) as { appointmentId: string }
+  // Same-key retry replays the original result; no second booking exists.
+  const retry = await book()
+  expect(retry.status).toBe(200)
+  expect(((await retry.json()) as { appointmentId: string }).appointmentId).toBe(body.appointmentId)
+  const counts = await db.query<{ n: number }>('SELECT count(*)::int AS n FROM appointments')
+  expect(counts[0]?.n).toBe(1)
+  const keys = await db.query<{ status: string; result: unknown }>(
+    `SELECT status, result FROM idempotency_keys WHERE key = 'n4probe-key-1'`,
+  )
+  expect(keys[0]?.status).toBe('completed')
+  expect(keys[0]?.result).toMatchObject({ appointmentId: body.appointmentId })
 })
 
 test('the appointments schema forbids two live bookings at the same calendar instant', async () => {

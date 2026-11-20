@@ -24,6 +24,7 @@ test('403 when the operator lacks the location', async () => {
 test('passes and sets locationId when the operator has access', async () => {
   const db = new FakeDatabase()
   db.enqueue([{ ok: 1 }]) // hasAccess -> a row
+  db.enqueue([{ role: 'owner' }]) // getRole -> owner
   const res = await harness(db).request('/loc/locA/thing')
   expect(res.status).toBe(200)
   expect(await res.json()).toEqual({ locationId: 'locA' })

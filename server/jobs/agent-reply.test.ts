@@ -16,7 +16,7 @@ function fakeClaude(text = 'drafted reply text') {
 
 test('approve-first (default) persists a DRAFT and never sends', async () => {
   const db = new FakeDatabase()
-  db.enqueue([{ id: 'locA', slug: 'Alex', client_slug: 'Alex', settings: {} }]) // getById
+  db.enqueue([{ id: 'locA', slug: 'Alex', client_slug: 'Alex', settings: { syntheticAttested: true } }]) // getById
   db.enqueue([{ id: 't-prev', type: 'message', payload: { direction: 'inbound', body: 'hi' } }]) // timeline list
   db.enqueue([{ id: 'm-draft' }]) // insertOutbound (draft)
   db.enqueue([{ id: 't-draft' }]) // timeline add
@@ -33,7 +33,7 @@ test('approve-first (default) persists a DRAFT and never sends', async () => {
         return { externalId: 'x' }
       },
     },
-    { locationId: 'locA', conversationId: 'conv1', contactId: 'c1' },
+    { locationId: 'locA', conversationId: 'conv1', contactId: 'c1', messageId: 'm1' },
   )
 
   expect(res).toMatchObject({ mode: 'approve-first', drafted: true, text: 'drafted reply text' })
@@ -47,7 +47,7 @@ test('approve-first (default) persists a DRAFT and never sends', async () => {
 
 test('autonomous mode sends through the shared outbound path', async () => {
   const db = new FakeDatabase()
-  db.enqueue([{ id: 'locA', slug: 'Alex', client_slug: 'Alex', settings: { replyMode: 'autonomous' } }]) // getById
+  db.enqueue([{ id: 'locA', slug: 'Alex', client_slug: 'Alex', settings: { replyMode: 'autonomous', syntheticAttested: true } }]) // getById
   db.enqueue([{ id: 't-prev', type: 'message', payload: {} }]) // timeline list
   db.enqueue([{ id: 'conv1', location_id: 'locA', contact_id: 'c1', external_id: '55' }]) // conversations.get
   db.enqueue([
@@ -73,7 +73,7 @@ test('autonomous mode sends through the shared outbound path', async () => {
         return { externalId: 'cw-1' }
       },
     },
-    { locationId: 'locA', conversationId: 'conv1', contactId: 'c1' },
+    { locationId: 'locA', conversationId: 'conv1', contactId: 'c1', messageId: 'm1' },
   )
 
   expect(res).toMatchObject({ mode: 'autonomous', sent: true, text: 'drafted reply text' })
@@ -83,11 +83,11 @@ test('autonomous mode sends through the shared outbound path', async () => {
 
 test('skips when the client has no anthropic key', async () => {
   const db = new FakeDatabase()
-  db.enqueue([{ id: 'locA', slug: 'Alex', client_slug: 'Alex', settings: {} }]) // getById
+  db.enqueue([{ id: 'locA', slug: 'Alex', client_slug: 'Alex', settings: { syntheticAttested: true } }]) // getById
   const claude = fakeClaude()
   const res = await handleAgentReply(
     { db, claude: claude.client, resolveSecret: () => undefined },
-    { locationId: 'locA', conversationId: 'conv1', contactId: 'c1' },
+    { locationId: 'locA', conversationId: 'conv1', contactId: 'c1', messageId: 'm1' },
   )
   expect(res.skipped).toMatch(/api key/i)
   expect(claude.calls).toHaveLength(0)
@@ -100,9 +100,31 @@ test('skips when the location is unknown', async () => {
   const claude = fakeClaude()
   const res = await handleAgentReply(
     { db, claude: claude.client, resolveSecret: () => 'sk' },
-    { locationId: 'ghost', conversationId: 'conv1', contactId: 'c1' },
+    { locationId: 'ghost', conversationId: 'conv1', contactId: 'c1', messageId: 'm1' },
   )
   expect(res.skipped).toMatch(/location/i)
   expect(claude.calls).toHaveLength(0)
+})
+
+test('R14-12: unattested tenant skips without model contact (observable reason)', async () => {
+  const db = new FakeDatabase()
+  db.enqueue([{ id: 'locA', slug: 'Alex', client_slug: 'Alex', settings: {} }]) // getById
+  const claude = fakeClaude()
+  let secrets = 0
+  const res = await handleAgentReply(
+    {
+      db,
+      claude: claude.client,
+      resolveSecret: () => {
+        secrets += 1
+        return 'sk'
+      },
+    },
+    { locationId: 'locA', conversationId: 'conv1', contactId: 'c1', messageId: 'm1' },
+  )
+  expect(res.skipped).toMatch(/not enabled for this tenant/)
+  expect(claude.calls).toHaveLength(0)
+  expect(secrets).toBe(0)
+  expect(db.calls).toHaveLength(1) // only getById ran
 })
 

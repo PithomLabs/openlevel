@@ -1,4 +1,6 @@
+import { createHash } from 'node:crypto'
 import type { Database } from '../db/database'
+import { canonicalJson } from '../lib/idempotency'
 import { renderTemplate } from '../lib/merge-fields'
 import { type Contact, ContactsRepo } from '../repos/contacts-repo'
 import { CustomValuesRepo } from '../repos/custom-values-repo'
@@ -62,9 +64,50 @@ const defaultSchedule: Scheduler = (thunk, ms) => {
   arm(0)
 }
 
+/**
+ * Durable wait continuation (FIND-06, G4): everything a resume needs,
+ * persisted before the run parks. `definitionHash` pins the exact workflow
+ * definition the run waits under — a resume whose live definition differs
+ * fails closed instead of executing stale steps against new logic.
+ */
+export interface WaitContinuation {
+  locationId: string
+  runId: string
+  workflowId: string
+  contactId: string | null
+  triggerType: string
+  fromPosition: number
+  dueAt: Date
+  definitionHash: string
+}
+
+/**
+ * Durable wait backend: persist the continuation and arrange its resume
+ * (delayed boss job in production). When present, waits NEVER arm the
+ * in-process scheduler — exactly one resume path may own a wait.
+ */
+export type ScheduleWait = (continuation: WaitContinuation) => Promise<void>
+
+/** Canonical hash over the workflow's ordered actions (position/type/config). */
+export function definitionHash(actions: WorkflowAction[]): string {
+  const normalized = [...actions]
+    .sort((a, b) => a.position - b.position)
+    .map((a) => ({ position: a.position, type: a.type, config: a.config }))
+  return createHash('sha256').update(canonicalJson(normalized)).digest('hex')
+}
+
 export interface WorkflowRunnerDeps {
   db: Database
   schedule?: Scheduler
+  scheduleWait?: ScheduleWait
+  /** Injectable wall clock (epoch ms) for wait due dates; tests pin it. */
+  now?: () => number
+  /**
+   * G1 kill-switch (required — every caller decides explicitly). When false,
+   * a workflow reaching a `wait` step FAILS loudly instead of persisting a
+   * continuation or arming a timer: no silent stranding, no unsafe scheduling.
+   */
+  waitsEnabled: boolean
 }
 
 /** Translate a wait step's config into milliseconds. Sums any supported units;
@@ -155,6 +198,7 @@ export async function runWorkflow(
   const { db } = deps
   const { locationId } = payload
   const schedule = deps.schedule ?? defaultSchedule
+  const now = deps.now ?? Date.now
 
   const runsRepo = new WorkflowRunsRepo(db, locationId)
 
@@ -198,6 +242,20 @@ export async function runWorkflow(
     const action = actions[i]!
 
     if (action.type === 'wait') {
+      if (!deps.waitsEnabled) {
+        // G1: waits disabled — fail the run LOUDLY at the wait step. Never
+        // arm a timer, never persist a continuation, never strand silently.
+        const refused: WorkflowRunStep = {
+          position: i,
+          type: 'wait',
+          status: 'failed',
+          detail:
+            'workflow waits are disabled (WORKFLOW_WAITS_ENABLED is not true) — ' +
+            'enable a proven durable implementation before using wait steps',
+        }
+        run = (await runsRepo.appendStep(run.id, refused, 'failed')) ?? run
+        return (await runsRepo.finish(run.id, 'failed')) ?? run
+      }
       const waiting: WorkflowRunStep = {
         position: i,
         type: 'wait',
@@ -207,6 +265,22 @@ export async function runWorkflow(
       run = (await runsRepo.appendStep(run.id, waiting, 'waiting')) ?? run
       const resumeId = run.id
       const next = i + 1
+      if (deps.scheduleWait) {
+        // Durable path (production): persist the continuation; a delayed job
+        // (or the boot reaper) resumes it. The in-process scheduler stays
+        // completely out of the picture — one owner per wait, ever.
+        await deps.scheduleWait({
+          locationId,
+          runId: resumeId,
+          workflowId: payload.workflowId,
+          contactId: payload.contactId,
+          triggerType: payload.triggerType,
+          fromPosition: next,
+          dueAt: new Date(now() + waitMs(action.config)),
+          definitionHash: definitionHash(actions),
+        })
+        return run
+      }
       schedule(() => runWorkflow(deps, payload, { runId: resumeId, fromPosition: next }), waitMs(action.config))
       return run
     }

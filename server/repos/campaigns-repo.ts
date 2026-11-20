@@ -55,4 +55,56 @@ export class CampaignsRepo extends LocationScopedRepo {
     )
     return rows[0]
   }
+
+  /**
+   * Atomically claim a campaign for sending (FIND-07). Wins for drafts and
+   * for sends abandoned mid-flight (status 'sending' untouched for 30+ min);
+   * concurrent twins and already-sent campaigns get no row back. The single
+   * UPDATE is the whole race protection — no read-then-act.
+   */
+  async claimForSend(id: string): Promise<Campaign | undefined> {
+    const rows = await this.scopedWrite<Campaign>(
+      `UPDATE campaigns SET status='sending', updated_at=now()
+       WHERE location_id=$1 AND id=$2
+         AND (status='draft' OR (status='sending' AND updated_at < now() - make_interval(mins => 30)))
+       RETURNING *`,
+      [id],
+    )
+    return rows[0]
+  }
+
+  /**
+   * Release a claim taken but never acted on (R13-11): when the send engine
+   * refuses before any provider operation (no provider connected), the
+   * campaign returns to retryable `draft` instead of sitting in `sending`
+   * until the 30-minute stale window expires. Only releases OUR claim — a
+   * terminal row (sent/cancelled) is never touched.
+   */
+  async releaseClaim(id: string): Promise<Campaign | undefined> {
+    const rows = await this.scopedWrite<Campaign>(
+      `UPDATE campaigns SET status='draft', updated_at=now()
+       WHERE location_id=$1 AND id=$2 AND status='sending'
+       RETURNING *`,
+      [id],
+    )
+    return rows[0]
+  }
+
+  /**
+   * Cancel a campaign (R13-11): atomic single statement — after it commits,
+   * no new recipient attempt may start (the send loop checks per recipient)
+   * and no new send may claim (terminal statuses never match claimForSend).
+   * An already in-flight provider request runs to completion; cancellation
+   * cannot reverse an accepted send. Returns undefined for missing or
+   * already-terminal campaigns.
+   */
+  async cancel(id: string): Promise<Campaign | undefined> {
+    const rows = await this.scopedWrite<Campaign>(
+      `UPDATE campaigns SET status='cancelled', updated_at=now()
+       WHERE location_id=$1 AND id=$2 AND status IN ('draft', 'sending')
+       RETURNING *`,
+      [id],
+    )
+    return rows[0]
+  }
 }

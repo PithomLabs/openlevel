@@ -14,6 +14,26 @@ function harness(db: FakeDatabase, locationId = 'locA') {
   return app
 }
 
+function harnessWithDispatch(db: FakeDatabase) {
+  const events: unknown[] = []
+  const app = new Hono<AppEnv>()
+  app.use('*', async (c, next) => {
+    c.set('operatorId', 'op1')
+    c.set('locationId', 'locA')
+    await next()
+  })
+  app.route(
+    '/',
+    calendarsRoute({
+      db,
+      dispatch: (e) => {
+        events.push(e)
+      },
+    }),
+  )
+  return { app, events }
+}
+
 function patchJson(app: Hono<AppEnv>, path: string, body: unknown) {
   return app.request(path, {
     method: 'PATCH',
@@ -163,6 +183,50 @@ test('POST /appointments books an appointment (201) with location_id set', async
   expect(await res.json()).toMatchObject({ ok: true, appointment: { id: 'a_new' } })
   expect(db.calls[0]?.params).toEqual(['locA', 'cal1']) // calendar get scoped to location
   expect(db.calls[1]?.params[0]).toBe('locA') // then the insert, also scoped
+})
+
+test('POST /appointments with a contact writes timeline + dispatches (FIND-07)', async () => {
+  const db = new FakeDatabase()
+  db.enqueue([{ id: 'cal1', location_id: 'locA', name: 'Inspections' }]) // calendar ownership get
+  db.enqueue([{ id: 'a_new', contact_id: 'c1', starts_at: '2026-06-04T15:00:00Z' }]) // insert RETURNING
+  db.enqueue([{ id: 't1' }]) // timeline add
+  const { app, events } = harnessWithDispatch(db)
+  const res = await app.request('/appointments', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      calendarId: 'cal1',
+      title: 'Inspection',
+      startsAt: '2026-06-04T15:00:00Z',
+      endsAt: '2026-06-04T15:30:00Z',
+      contactId: 'c1',
+    }),
+  })
+  expect(res.status).toBe(201)
+  const tlCall = db.calls.find((c) => /INSERT INTO timeline_events/i.test(c.sql))
+  expect(tlCall?.params).toContain('appointment_booked')
+  expect(events).toHaveLength(1)
+  expect(events[0]).toMatchObject({ locationId: 'locA', triggerType: 'appointment_booked', contactId: 'c1' })
+})
+
+test('POST /appointments without a contact skips timeline + dispatch (FIND-07)', async () => {
+  const db = new FakeDatabase()
+  db.enqueue([{ id: 'cal1', location_id: 'locA', name: 'Inspections' }])
+  db.enqueue([{ id: 'a_new', contact_id: null }])
+  const { app, events } = harnessWithDispatch(db)
+  const res = await app.request('/appointments', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      calendarId: 'cal1',
+      title: 'Block',
+      startsAt: '2026-06-04T15:00:00Z',
+      endsAt: '2026-06-04T15:30:00Z',
+    }),
+  })
+  expect(res.status).toBe(201)
+  expect(db.calls.some((c) => /INSERT INTO timeline_events/i.test(c.sql))).toBe(false)
+  expect(events).toEqual([])
 })
 
 test('POST /appointments rejects an unknown or foreign calendar (400, no insert)', async () => {

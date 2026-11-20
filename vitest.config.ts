@@ -4,7 +4,10 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    include: ['server/**/*.test.ts', 'scripts/**/*.test.ts'],
+    include: ['server/**/*.test.ts', 'scripts/**/*.test.ts', 'db/**/*.test.ts'],
+    // Real-PostgreSQL tests run separately via `task test:pg` (they need
+    // Docker); the main suite stays hermetic.
+    exclude: ['**/*.pg.test.ts', '**/node_modules/**', '**/dist/**'],
     // PGlite spins up a fresh in-process WASM Postgres and reloads the full
     // schema per `setup()`; on a loaded Windows box that cold-start can exceed
     // the 5s default and flake out the route-integration tests. 30s is generous

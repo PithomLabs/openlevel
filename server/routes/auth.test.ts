@@ -72,6 +72,7 @@ test('throttles repeated login attempts from the same IP with a 429', async () =
 
 test('me returns the operator for a valid session', async () => {
   const db = new FakeDatabase()
+  db.enqueue([{ role: 'owner' }]) // requireOwner: getRole
   db.enqueue([{ ...operatorRow, password_hash: 'h' }]) // getById
   const token = createSession({ operatorId: 'op1' }, secret)
   const res = await authRoute({ db, sessionSecret: secret }).request('/me', {

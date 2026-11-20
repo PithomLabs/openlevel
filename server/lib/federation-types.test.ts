@@ -1,5 +1,6 @@
 import {
   OPENLEVEL_CARD,
+  PROPOSAL_REF_TTL_MS,
   encodeActionRef,
   decodeActionRef,
   federationTurnSchema,
@@ -32,6 +33,16 @@ test('decodeActionRef rejects a foreign / malformed ref as null', () => {
   expect(decodeActionRef('ol:not-base64!!')).toBeNull()
   expect(decodeActionRef('ol:' + Buffer.from('{"params":{}}', 'utf8').toString('base64url'))).toBeNull() // no verb
   expect(decodeActionRef(42 as unknown)).toBeNull()
+})
+
+test('R13-10: fresh refs decode, expired refs report expired, legacy refs without iat still decode', () => {
+  const now = Date.now()
+  const fresh = encodeActionRef({ verb: 'tag_contact', params: { contactId: 'c1' } })
+  expect(decodeActionRef(fresh, now)).toMatchObject({ verb: 'tag_contact' })
+  const stale = 'ol:' + Buffer.from(JSON.stringify({ verb: 'tag_contact', params: { contactId: 'c1' }, iat: now - PROPOSAL_REF_TTL_MS - 1000 }), 'utf8').toString('base64url')
+  expect(decodeActionRef(stale, now)).toEqual({ expired: true })
+  const legacy = 'ol:' + Buffer.from(JSON.stringify({ verb: 'tag_contact', params: { contactId: 'c1' } }), 'utf8').toString('base64url')
+  expect(decodeActionRef(legacy, now)).toMatchObject({ verb: 'tag_contact' })
 })
 
 test('federationTurnSchema requires a non-empty message; threadRef optional', () => {

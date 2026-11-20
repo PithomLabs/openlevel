@@ -25,7 +25,7 @@ async function setup() {
     'Alex',
     { color: '#4f46e5' },
   ])
-  const contact = await new ContactsRepo(db, loc).upsertByMatch(
+  const { contact } = await new ContactsRepo(db, loc).upsertByMatch(
     { name: 'Sam Smith', phone: '+16785550142' },
     'seed',
   )

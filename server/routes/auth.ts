@@ -8,6 +8,7 @@ import { verifyPassword } from '../lib/password'
 import { SlidingWindowRateLimiter } from '../lib/rate-limit'
 import { SESSION_TTL_SECONDS, createSession } from '../lib/session'
 import { SESSION_COOKIE, operatorAuth } from '../middleware/auth'
+import { requireOwner } from '../middleware/require-owner'
 import { type Operator, OperatorsRepo } from '../repos/operators-repo'
 
 /** Login throttle: at most 10 attempts per IP per minute. Argon2id already
@@ -78,7 +79,7 @@ export function authRoute(deps: AuthDeps): Hono<AppEnv> {
     return c.json({ ok: true })
   })
 
-  app.get('/me', operatorAuth(deps.sessionSecret), async (c) => {
+  app.get('/me', operatorAuth(deps.sessionSecret), requireOwner(deps.db), async (c) => {
     const operator = await operators.getById(c.get('operatorId'))
     if (!operator) return c.json({ error: 'not found' }, 404)
     return c.json({ operator: publicOperator(operator) })

@@ -1094,3 +1094,92 @@ CREATE UNIQUE INDEX IF NOT EXISTS push_tokens_token_unique
   ON push_tokens(token);
 CREATE INDEX IF NOT EXISTS push_tokens_by_operator
   ON push_tokens(operator_id);
+
+-- Consolidated from db/migrations/20261119130000_idempotency_outbox.sql
+-- (FIND-07). This file is the dev/PGlite bootstrap: every versioned
+-- migration's final state is mirrored here (migrations + consolidated
+-- schema, Rails-style). Never edit one without the other.
+CREATE TABLE IF NOT EXISTS processed_events (
+  location_id  text NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+  event_id     text NOT NULL,
+  workflow_id  text NOT NULL,
+  trigger_type text NOT NULL,
+  created_at   timestamptz DEFAULT now(),
+  PRIMARY KEY (location_id, event_id, workflow_id)
+);
+
+CREATE TABLE IF NOT EXISTS idempotency_keys (
+  location_id  text NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+  operation    text NOT NULL,
+  key          text NOT NULL,
+  payload_hash text NOT NULL,
+  status       text NOT NULL DEFAULT 'in_progress',
+  result       jsonb,
+  created_at   timestamptz DEFAULT now(),
+  updated_at   timestamptz DEFAULT now(),
+  PRIMARY KEY (location_id, operation, key)
+);
+
+CREATE TABLE IF NOT EXISTS outbox (
+  id           text PRIMARY KEY,
+  location_id  text NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+  aggregate    text NOT NULL,
+  aggregate_id text NOT NULL,
+  event        text NOT NULL,
+  payload      jsonb NOT NULL DEFAULT '{}',
+  status       text NOT NULL DEFAULT 'pending',
+  attempts     int NOT NULL DEFAULT 0,
+  available_at timestamptz DEFAULT now(),
+  created_at   timestamptz DEFAULT now(),
+  updated_at   timestamptz DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS outbox_drain
+  ON outbox(location_id, status, available_at) WHERE status IN ('pending', 'sending');
+
+CREATE UNIQUE INDEX IF NOT EXISTS recipients_campaign_contact
+  ON campaign_recipients(location_id, campaign_id, contact_id)
+  WHERE contact_id IS NOT NULL;
+
+-- Consolidated from db/migrations/20261119140000_workflow_waits.sql
+-- (FIND-06). Mirrors the versioned migration exactly; never edit one
+-- without the other.
+CREATE TABLE IF NOT EXISTS workflow_waits (
+  id             text PRIMARY KEY,
+  location_id    text NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+  run_id         text NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+  workflow_id    text NOT NULL,
+  contact_id     text REFERENCES contacts(id) ON DELETE SET NULL,
+  trigger_type   text NOT NULL,
+  from_position  int NOT NULL,
+  due_at         timestamptz NOT NULL,
+  definition_hash text NOT NULL,
+  status         text NOT NULL DEFAULT 'pending',
+  claimed_by     text,
+  claimed_at     timestamptz,
+  attempts       int NOT NULL DEFAULT 0,
+  created_at     timestamptz DEFAULT now(),
+  updated_at     timestamptz DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS waits_single_pending_per_run
+  ON workflow_waits(run_id) WHERE status IN ('pending', 'claimed');
+
+CREATE INDEX IF NOT EXISTS waits_due
+  ON workflow_waits(status, due_at) WHERE status = 'pending';
+
+-- Controlled outbound sink (staging only): every would-be provider send
+-- lands here instead of reaching a recipient. Mirrors migration
+-- 20261119150000 (consolidated-schema discipline: both move together).
+CREATE TABLE IF NOT EXISTS outbound_sink (
+  id          text PRIMARY KEY,
+  location_id text NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+  channel     text NOT NULL,
+  recipient   text NOT NULL,
+  subject     text,
+  body        text NOT NULL,
+  created_at  timestamptz DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS sink_by_location
+  ON outbound_sink(location_id, created_at DESC);

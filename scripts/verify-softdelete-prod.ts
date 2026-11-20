@@ -11,6 +11,7 @@
 // probe is a verification artifact created seconds earlier, never real data.
 import { Pool } from 'pg'
 import { PgDatabase } from '../server/db/database'
+import { collectEnvSecrets, formatSafeError } from '../server/lib/secrets'
 import { ContactsRepo } from '../server/repos/contacts-repo'
 
 const PROBE_NAME = 'ZZ Soft-Delete Probe (auto-removed)'
@@ -31,10 +32,10 @@ try {
   const repo = new ContactsRepo(db, loc)
 
   // 1. create the keyless probe
-  const created = await repo.upsertByMatch({ name: PROBE_NAME }, 'softdelete-verify')
-  const id = created.id
+  const { contact: probe } = await repo.upsertByMatch({ name: PROBE_NAME }, 'softdelete-verify')
+  const id = probe.id
   if (!id) fail('upsertByMatch returned no id')
-  if (created.archived_at !== null) fail('new contact should start live (archived_at null)')
+  if (probe.archived_at !== null) fail('new contact should start live (archived_at null)')
   console.log('[verify] created probe ' + id + ' in location ' + loc)
 
   // 2. it is in the live book, not in archived
@@ -65,7 +66,8 @@ try {
 
   console.log('VERIFY_RESULT=PASS')
 } catch (e) {
-  fail('threw: ' + (e instanceof Error ? e.message : String(e)))
+  // Driver errors embed the connection string: scrub before the FAIL line.
+  fail('threw: ' + formatSafeError(e, collectEnvSecrets(process.env)))
 } finally {
   await pool.end()
 }
