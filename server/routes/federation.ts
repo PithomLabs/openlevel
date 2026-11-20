@@ -28,6 +28,7 @@ import {
   type TurnResponse,
 } from '../lib/federation-types'
 import { type AssistantDeps, runOperatorAssistant } from '../lib/operator-assistant'
+import { IdempotencyConflict, IdempotencyInProgress } from '../lib/idempotency'
 import { confirmOperatorWrite, type SendTextFn } from '../lib/operator-tools'
 import { AppointmentsRepo } from '../repos/appointments-repo'
 import { ContactTasksRepo } from '../repos/contact-tasks-repo'
@@ -44,6 +45,31 @@ export interface FederationRouteDeps {
   sendText?: SendTextFn
   /** Injectable clock (tests pin it; production passes nothing). */
   now?: () => Date
+  /** Injectable env (tests pin it; production passes nothing → process.env). */
+  env?: Record<string, string | undefined>
+}
+
+/**
+ * N9 tenant binding (synthetic-staging control). The bearer authenticates the
+ * gateway, but the tenant header it names is constrained server-side:
+ *
+ * - When FEDERATION_TENANT_ALLOWLIST is set, the tenant must be listed.
+ * - When it is unset, staging refuses every tenant request (fail-closed);
+ *   other environments keep the legacy trusted-subsystem behavior.
+ *
+ * Staging tenants must be synthetic-only (owner-provisioned). Production
+ * per-tenant token binding is an explicit owner gate, not this list.
+ */
+export function federationTenantAllowed(
+  env: Record<string, string | undefined>,
+  tenant: string,
+): boolean {
+  const raw = (env.FEDERATION_TENANT_ALLOWLIST ?? '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+  if (raw.length > 0) return raw.includes(tenant)
+  return env.APP_ENV !== 'staging'
 }
 
 /** Constant-time string compare via fixed-length sha256 digests (timingSafeEqual
@@ -127,6 +153,7 @@ async function buildToday(db: Database, locationId: string, now: Date): Promise<
 
 export function federationRoute(deps: FederationRouteDeps) {
   const now = deps.now ?? (() => new Date())
+  const env = deps.env ?? process.env
   const app = new Hono<AppEnv>()
 
   // Gate the whole /federation/* surface. 503 wins over 401 so an un-provisioned
@@ -142,8 +169,11 @@ export function federationRoute(deps: FederationRouteDeps) {
   app.get('/federation/capabilities', (c) => c.json(OPENLEVEL_CARD))
 
   app.get('/federation/today', async (c) => {
-    const tenant = c.req.header('x-federation-tenant')
+    // Trimmed like turn/confirm: surrounding whitespace is transport noise,
+    // not identity — the allowlist comparison sees the canonical tenant.
+    const tenant = (c.req.header('x-federation-tenant') ?? '').trim()
     if (!tenant) return c.json({ error: 'missing tenant' }, 400)
+    if (!federationTenantAllowed(env, tenant)) return c.json({ error: 'tenant not allowed' }, 403)
     const items = await buildToday(deps.db, tenant, now())
     return c.json(items)
   })
@@ -157,6 +187,7 @@ export function federationRoute(deps: FederationRouteDeps) {
     if (!deps.claude) return c.json({ ok: false, error: 'assistant is not configured' }, 501)
     const loc = (c.req.header('x-federation-tenant') ?? '').trim()
     if (!loc) return c.json({ ok: false, error: 'tenant_required' }, 400)
+    if (!federationTenantAllowed(env, loc)) return c.json({ ok: false, error: 'tenant_forbidden' }, 403)
     let raw: unknown
     try {
       raw = await c.req.json()
@@ -195,6 +226,9 @@ export function federationRoute(deps: FederationRouteDeps) {
   app.post('/federation/confirm', async (c) => {
     const loc = (c.req.header('x-federation-tenant') ?? '').trim()
     if (!loc) return c.json({ ok: false, reason: 'tenant_required' } satisfies ConfirmResult, 400)
+    if (!federationTenantAllowed(env, loc)) {
+      return c.json({ ok: false, reason: 'tenant_forbidden' } satisfies ConfirmResult, 403)
+    }
     let raw: unknown
     try {
       raw = await c.req.json()
@@ -204,13 +238,40 @@ export function federationRoute(deps: FederationRouteDeps) {
     const parsed = federationConfirmSchema.safeParse(raw)
     if (!parsed.success) return c.json({ ok: false, reason: 'unsupported' } satisfies ConfirmResult, 400)
     let action: { verb: string; params: Record<string, unknown> } | null
+    let idempotencyKey: string | undefined
     if ('proposalRef' in parsed.data) {
-      action = decodeActionRef(parsed.data.proposalRef)
-      if (!action) return c.json({ ok: false, reason: 'unsupported' } satisfies ConfirmResult, 400)
+      const decoded = decodeActionRef(parsed.data.proposalRef)
+      if (!decoded) return c.json({ ok: false, reason: 'unsupported' } satisfies ConfirmResult, 400)
+      if ('expired' in decoded) {
+        return c.json({ ok: false, reason: 'expired', detail: 'This approval is stale — ask for a fresh proposal.' } satisfies ConfirmResult, 400)
+      }
+      action = decoded
+      // R13-10: the ref is deterministic for one logical proposal, so it is
+      // the idempotency key — a retried tap replays instead of re-writing.
+      idempotencyKey = parsed.data.proposalRef
     } else {
       action = { verb: parsed.data.verb, params: parsed.data.params }
     }
-    const r = await confirmOperatorWrite({ db: deps.db, locationId: loc, sendText: deps.sendText, now }, action)
+    let r: Awaited<ReturnType<typeof confirmOperatorWrite>>
+    try {
+      r = await confirmOperatorWrite(
+        // R14-02: federation has no operator identity (service-token auth), so
+        // the origin marker is the actor — distinct from any UI operator id.
+        // R14-07: the route's validated env rides explicitly — the fence and
+        // side-effect policy inside the write path must see the same env the
+        // route gated on, never a re-read of ambient process.env.
+        { db: deps.db, locationId: loc, sendText: deps.sendText, now, actor: 'federation', env },
+        action,
+        idempotencyKey === undefined ? undefined : { idempotencyKey },
+      )
+    } catch (err) {
+      // Same proposalRef, contradictory body (or a racing twin): the write
+      // happens at most once; the twin retries into the recorded outcome.
+      if (err instanceof IdempotencyConflict || err instanceof IdempotencyInProgress) {
+        return c.json({ ok: false, reason: 'conflict', detail: err.message } satisfies ConfirmResult, 409)
+      }
+      throw err
+    }
     if (!r.ok) return c.json({ ok: false, reason: 'rejected', detail: r.message } satisfies ConfirmResult, 200)
     return c.json({ ok: true, detail: r.message } satisfies ConfirmResult, 200)
   })

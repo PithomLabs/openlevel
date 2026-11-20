@@ -281,6 +281,17 @@ function ConnectionBadge({ dirty, view }: { dirty: boolean; view: VoiceSettings 
   if (dirty || !view) {
     return <span className="text-xs font-medium text-slate-400">Save to check connection</span>
   }
+  if (view.connected && view.simulated) {
+    return (
+      <span
+        className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700"
+        title="Staging sink: calls are recorded, never placed"
+      >
+        <CheckCircle2 className="h-3.5 w-3.5" />
+        Simulated
+      </span>
+    )
+  }
   if (view.connected) {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">

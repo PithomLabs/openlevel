@@ -27,4 +27,14 @@ export class FakeDatabase implements Database {
     if (next && !Array.isArray(next) && '__error' in next) throw next.__error
     return (next ?? []) as T[]
   }
+
+  /**
+   * API-compatible passthrough: the fake holds no real state, so there is
+   * nothing to isolate — fn runs inline and throws propagate. Atomicity
+   * proofs belong on PGlite (main suite) and real Postgres (test:pg), never
+   * here.
+   */
+  async withTransaction<T>(fn: (db: Database) => Promise<T>): Promise<T> {
+    return fn(this)
+  }
 }

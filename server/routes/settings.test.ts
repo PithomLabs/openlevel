@@ -210,6 +210,18 @@ test('GET /sending returns the choices plus honest per-channel readouts', async 
   expect(db.calls[0]?.params[0]).toBe('locA')
 })
 
+test('R13-07: a resolved sink reports simulated, never a green connected', async () => {
+  const SINK_EMAIL: ResolvedEmailSender = {
+    ok: true,
+    sender: { name: 'sink', sendEmail: async () => ({ externalId: 'sink-1', provider: 'sink' }) },
+  }
+  const db = new FakeDatabase()
+  db.enqueue([{ settings: { sending: { emailProvider: 'brevo' } } }])
+  const res = await sendingHarness(db, SINK_EMAIL, SMS_OFF).request('/sending')
+  expect(res.status).toBe(200)
+  expect(await res.json()).toMatchObject({ email: { connected: true, simulated: true } })
+})
+
 test('GET /sending defaults to none on both channels for a fresh location', async () => {
   const db = new FakeDatabase()
   db.enqueue([{ settings: {} }])

@@ -5,7 +5,7 @@ import type { Contact } from '../../repos/contacts-repo'
 import type { EmailSender, SmsSender } from './provider'
 import { resolveEmailSender, resolveSmsSender } from './resolve'
 
-export type RecipientStatus = 'sent' | 'skipped' | 'failed'
+export type RecipientStatus = 'sent' | 'skipped' | 'failed' | 'simulated'
 
 export interface RecipientOutcome {
   contactId: string
@@ -16,7 +16,7 @@ export interface RecipientOutcome {
 }
 
 export type CampaignSendResult =
-  | { ok: true; outcomes: RecipientOutcome[]; sentCount: number }
+  | { ok: true; outcomes: RecipientOutcome[]; sentCount: number; simulated: boolean; cancelled: boolean }
   | { ok: false; reason: string }
 
 export interface CampaignSendDeps {
@@ -28,6 +28,28 @@ export interface CampaignSendDeps {
    *  rate limits (long-code SMS is ~1 msg/sec; we stay well inside it). */
   throttleMs?: number
   sleep?: (ms: number) => Promise<void>
+  /**
+   * Called after EVERY per-recipient outcome is decided (sent, skipped, or
+   * failed — FIND-07). The route persists each outcome immediately, so a
+   * crash mid-blast leaves an exact record of what was attempted instead of
+   * an all-or-nothing gap. Optional: pure drivers omit it.
+   */
+  onOutcome?: (contactId: string, status: RecipientStatus) => Promise<void>
+  /**
+   * Called BEFORE each provider call (N5). The route persists a 'sending'
+   * marker, so a crash between provider-accept and outcome-record leaves an
+   * UNCERTAIN row instead of a 'pending' row: resume quarantines it rather
+   * than blindly resending a possibly-accepted message.
+   */
+  onSending?: (contactId: string) => Promise<void>
+  /**
+   * Cancellation gate (R13-11), consulted before EVERY recipient attempt.
+   * When it answers true the loop stops immediately: no new provider call
+   * starts (an in-flight one runs to completion — cancellation cannot
+   * reverse an accepted send) and the result reports cancelled with the
+   * partial outcomes recorded so far.
+   */
+  shouldStop?: () => Promise<boolean>
 }
 
 export interface CampaignSendInput {
@@ -74,23 +96,32 @@ export async function sendCampaign(deps: CampaignSendDeps, input: CampaignSendIn
   const outcomes: RecipientOutcome[] = []
   let sentCount = 0
   let providerCalls = 0
+  // R13-07: sink writes are 'simulated' outcomes, never 'sent' — sentCount
+  // (and everything downstream: sent_count, dashboards, reporting) counts
+  // real provider accepts only.
+  const sinkMode = email?.name === 'sink' || sms?.name === 'sink'
+  const record = async (contactId: string, status: RecipientStatus, detail: string | null) => {
+    outcomes.push({ contactId, status, detail })
+    await deps.onOutcome?.(contactId, status)
+  }
 
   for (const contact of input.contacts) {
+    // R13-11: stop BEFORE anything else for this recipient (no skip rows, no
+    // throttle sleep, no 'sending' marker, no provider call) once cancelled.
+    if (await deps.shouldStop?.()) {
+      return { ok: true, outcomes, sentCount, simulated: sinkMode, cancelled: true }
+    }
     const suppressed = contact.tags.find((t) =>
       (SUPPRESSION_TAGS as readonly string[]).includes(t.toLowerCase()),
     )
     if (suppressed) {
-      outcomes.push({ contactId: contact.id, status: 'skipped', detail: suppressed.toLowerCase() })
+      await record(contact.id, 'skipped', suppressed.toLowerCase())
       continue
     }
 
     const to = isEmail ? contact.emails[0] : contact.phones[0]
     if (!to) {
-      outcomes.push({
-        contactId: contact.id,
-        status: 'skipped',
-        detail: isEmail ? 'no email address' : 'no phone number',
-      })
+      await record(contact.id, 'skipped', isEmail ? 'no email address' : 'no phone number')
       continue
     }
 
@@ -98,6 +129,7 @@ export async function sendCampaign(deps: CampaignSendDeps, input: CampaignSendIn
     providerCalls++
 
     const body = renderTemplate(input.campaign.body, contact, customValues)
+    await deps.onSending?.(contact.id)
     try {
       if (email) {
         const subject = renderTemplate(input.campaign.subject ?? input.campaign.name, contact, customValues)
@@ -105,16 +137,18 @@ export async function sendCampaign(deps: CampaignSendDeps, input: CampaignSendIn
       } else if (sms) {
         await sms.sendSms({ to, body })
       }
-      outcomes.push({ contactId: contact.id, status: 'sent', detail: null })
-      sentCount++
+      if (sinkMode) {
+        await record(contact.id, 'simulated', null)
+      } else {
+        await record(contact.id, 'sent', null)
+        sentCount++
+      }
     } catch (err) {
-      outcomes.push({
-        contactId: contact.id,
-        status: 'failed',
-        detail: err instanceof Error ? err.message : 'send failed',
-      })
+      await record(contact.id, 'failed', err instanceof Error ? err.message : 'send failed')
     }
   }
 
-  return { ok: true, outcomes, sentCount }
+  // The sink sender's name is the honest signal: its outcomes were recorded,
+  // not delivered. The route surfaces this so no UI can claim a real send.
+  return { ok: true, outcomes, sentCount, simulated: sinkMode, cancelled: false }
 }

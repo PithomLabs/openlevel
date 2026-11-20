@@ -59,7 +59,7 @@ export function conversationsRoute(deps: ConversationsDeps): Hono<AppEnv> {
       { sendMessage: deps.sendMessage, resolveSecret: deps.resolveSecret },
     )
     if (!result.ok) return c.json({ error: result.error }, result.status)
-    return c.json({ ok: true, message: result.message })
+    return c.json({ ok: true, message: result.message, ...(result.simulated ? { simulated: true } : {}) })
   })
 
   // "Draft from agent" — generate an AI reply for the operator to review/edit.

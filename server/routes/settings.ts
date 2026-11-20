@@ -118,13 +118,16 @@ export function settingsRoute(deps: {
   const resolveVoice = deps.resolveVoice ?? resolveVoiceProvider
 
   /** Per-channel honest readout: connected only when the chosen provider's
-   *  keys actually resolve, with the refusal reason when they don't. */
+   *  keys actually resolve, with the refusal reason when they don't. A
+   *  resolved SINK (staging) reports simulated so the UI cannot show a green
+   *  "Connected" for a channel that never dials. */
   async function sendingStatus(loc: string) {
     const [email, sms] = await Promise.all([resolveEmail(deps.db, loc), resolveSms(deps.db, loc)])
-    return {
-      email: email.ok ? { connected: true } : { connected: false, reason: email.reason },
-      sms: sms.ok ? { connected: true } : { connected: false, reason: sms.reason },
-    }
+    const readout = (r: { ok: boolean; sender?: { name: string }; reason?: string }) =>
+      r.ok && r.sender
+        ? { connected: true, ...(r.sender.name === 'sink' ? { simulated: true as const } : {}) }
+        : { connected: false, reason: r.reason ?? 'not connected' }
+    return { email: readout(email), sms: readout(sms) }
   }
 
   app.get('/agent', async (c) => {
@@ -206,12 +209,17 @@ export function settingsRoute(deps: {
 
   // Voice (Module 52): which voice provider this location connected. Same
   // honest readout as payments — connected only when the chosen provider's
-  // keys + numbers actually resolve into a working adapter.
+  // keys + numbers actually resolve into a working adapter. A resolved sink
+  // reports simulated instead of a green connected.
+  const voiceReadout = (resolved: Awaited<ReturnType<typeof resolveVoice>>) =>
+    resolved.ok
+      ? { connected: true, ...(resolved.provider.name === 'sink' ? { simulated: true as const } : {}) }
+      : { connected: false, reason: resolved.reason }
   app.get('/voice', async (c) => {
     const loc = c.get('locationId')
     const view = await new LocationSettingsRepo(deps.db, loc).getVoiceSettings()
     const resolved = await resolveVoice(deps.db, loc)
-    return c.json({ ...view, connected: resolved.ok, ...(resolved.ok ? {} : { reason: resolved.reason }) })
+    return c.json({ ...view, ...voiceReadout(resolved) })
   })
 
   app.patch('/voice', zValidator('json', voicePatchSchema), async (c) => {
@@ -219,7 +227,7 @@ export function settingsRoute(deps: {
     const input = c.req.valid('json')
     const view = await new LocationSettingsRepo(deps.db, loc).updateVoiceSettings(input)
     const resolved = await resolveVoice(deps.db, loc)
-    return c.json({ ok: true, ...view, connected: resolved.ok, ...(resolved.ok ? {} : { reason: resolved.reason }) })
+    return c.json({ ok: true, ...view, ...voiceReadout(resolved) })
   })
 
   return app

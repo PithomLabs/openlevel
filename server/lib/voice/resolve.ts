@@ -1,7 +1,9 @@
 import type { Database } from '../../db/database'
 import { LocationsRepo } from '../../repos/locations-repo'
+import { sideEffectPolicyFromEnv } from '../sending/policy'
 import { resolveSecret } from '../vault'
 import type { VoiceProvider } from './provider'
+import { createSinkVoiceAdapter } from './sink-voice-adapter'
 import { createTwilioVoiceAdapter } from './twilio-voice-adapter'
 import { createVapiAdapter } from './vapi-adapter'
 
@@ -33,8 +35,19 @@ export type ResolvedVoice = { ok: true; provider: VoiceProvider } | { ok: false;
 export async function resolveVoiceProvider(
   db: Database,
   locationId: string,
-  opts: { statusCallbackUrl?: string } = {},
+  opts: { statusCallbackUrl?: string; env?: Record<string, string | undefined> } = {},
 ): Promise<ResolvedVoice> {
+  const policy = sideEffectPolicyFromEnv(opts.env ?? process.env)
+  // Restricted preview / malformed identity: refuse before any adapter exists.
+  if (policy.mode === 'refuse') return { ok: false, reason: policy.reason }
+  if (policy.mode === 'sink') {
+    // R13-01: staging never constructs a live voice provider, even with real
+    // keys configured. An absent allowlist refuses everything (fail-closed).
+    if (policy.allowlist.length === 0) {
+      return { ok: false, reason: 'staging sink allowlist is not configured (STAGING_SINK_ALLOWLIST)' }
+    }
+    return { ok: true, provider: createSinkVoiceAdapter(db, locationId, { sink: true, allowlist: policy.allowlist }) }
+  }
   const location = await new LocationsRepo(db).getById(locationId)
   if (!location) return { ok: false, reason: 'location not found' }
 

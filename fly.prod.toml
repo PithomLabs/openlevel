@@ -1,0 +1,58 @@
+# OpenLevel product deploy — PRODUCTION (openlevel-prod).
+#
+# *** PROVISIONED, NOT LIVE. ***
+# This file prepares the production deployment definition. It does NOT
+# authorize provisioning the app, releasing the image, importing customer
+# data, enabling customer integrations, changing DNS, or sending traffic.
+# Each of those is a separate explicit owner authorization (runbook
+# docs/deployment/ENVIRONMENTS.md). Until the production acceptance gates
+# pass (14-item checklist + PITR rehearsal evidence), this app stays down.
+#
+# Same image and conventions as fly.toml; only the identity differs
+# (APP_ENV=production, dedicated Neon production project, production-only
+# secrets, least-privilege roles). Production sizing/topology (HA,
+# web/worker split) is an owner decision recorded in the runbook — this
+# file mirrors the staging single-Machine shape as a starting point only.
+#
+# Region: intentionally UNSET — owner confirms production geography.
+# Never point staging/dev tooling at this app; never copy production
+# secrets or data into staging or development.
+
+app = "openlevel-prod"
+
+# Top-level process keys live HERE, before the first [section] (TOML assigns
+# every key to the most recent table header — see fly.toml).
+kill_signal = "SIGTERM"
+kill_timeout = "30s"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[deploy]
+  strategy = "rolling"
+  release_command = "npm run db:migrate:release"
+
+[http_service]
+  internal_port = 8790
+  force_https = true
+  auto_stop_machines = "off"
+  min_machines_running = 1
+  [[http_service.checks]]
+    path = "/ready"
+    interval = "15s"
+    timeout = "5s"
+
+[env]
+  NODE_ENV = "production"
+  APP_ENV = "production"
+  # Restricted preview (R14-11): non-secret, committed. 'true' until the
+  # production acceptance gates pass and the owner explicitly flips it to
+  # 'false' — production refuses to boot with the flag unset, so live
+  # operation can never happen by omission.
+  RESTRICTED_PREVIEW = "true"
+  ROLE = "all"
+  PORT = "8790"
+
+[[restart]]
+  policy = "on-failure"
+  retries = 10

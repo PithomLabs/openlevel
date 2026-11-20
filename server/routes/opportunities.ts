@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
 import { z } from 'zod'
@@ -72,6 +73,7 @@ export function opportunitiesRoute(deps: {
       locationId: loc,
       triggerType: 'opportunity_created',
       contactId: opportunity.contact_id ?? null,
+      eventId: randomUUID(),
     })
     return c.json({ ok: true, opportunity }, 201)
   })

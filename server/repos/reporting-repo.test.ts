@@ -14,6 +14,7 @@ test('contactCount scopes to the location and coerces to a number', async () => 
   expect(await repo(db).contactCount()).toBe(3)
   expect(db.calls[0]?.sql).toMatch(/from contacts/i)
   expect(db.calls[0]?.sql).toMatch(/where location_id = \$1/i)
+  expect(db.calls[0]?.sql).toMatch(/archived_at is null/i)
   expect(db.calls[0]?.params).toEqual(['locA'])
 })
 

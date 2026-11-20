@@ -14,6 +14,26 @@ function harness(db: FakeDatabase, locationId = 'locA') {
   return app
 }
 
+function harnessWithDispatch(db: FakeDatabase) {
+  const events: unknown[] = []
+  const app = new Hono<AppEnv>()
+  app.use('*', async (c, next) => {
+    c.set('operatorId', 'op1')
+    c.set('locationId', 'locA')
+    await next()
+  })
+  app.route(
+    '/',
+    contactsRoute({
+      db,
+      dispatch: (e) => {
+        events.push(e)
+      },
+    }),
+  )
+  return { app, events }
+}
+
 test('lists contacts scoped to the current location', async () => {
   const db = new FakeDatabase()
   db.enqueue([{ id: 'c1', name: 'Bob' }]) // list
@@ -45,7 +65,9 @@ test('get returns 404 when the contact is not in this location', async () => {
 
 test('creates a contact from name + phone and returns 201', async () => {
   const db = new FakeDatabase()
-  db.enqueue([{ id: 'c9', name: 'Admin', phones: ['+15035550142'], emails: [] }]) // upsertByMatch RETURNING *
+  db.enqueue([]) // findByPhone -> no match
+  db.enqueue([{ id: 'c9', name: 'Admin', phones: ['+15035550142'], emails: [], created: true }]) // upsertByMatch RETURNING *
+  db.enqueue([{ id: 't1' }]) // contact_created timeline row
   const res = await harness(db).request('/', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -57,9 +79,42 @@ test('creates a contact from name + phone and returns 201', async () => {
     contact: { id: 'c9', name: 'Admin', phones: ['+15035550142'], emails: [] },
   })
   // upsertByMatch params: [id, locationId, name, phones, emails, key, source, externalIds]
-  expect(db.calls[0]?.params[1]).toBe('locA') // location scoped
-  expect(db.calls[0]?.params[2]).toBe('Admin') // name from the body
-  expect(db.calls[0]?.params[6]).toBe('manual') // operator-entered source
+  const insert = db.calls.find((q) => /INSERT INTO contacts/i.test(q.sql))
+  expect(insert?.params[1]).toBe('locA') // location scoped
+  expect(insert?.params[2]).toBe('Admin') // name from the body
+  expect(insert?.params[6]).toBe('manual') // operator-entered source
+})
+
+test('manual add of a new contact writes a timeline event and dispatches (FIND-07)', async () => {
+  const db = new FakeDatabase()
+  db.enqueue([]) // findByPhone -> no match
+  db.enqueue([{ id: 'c9', created: true }]) // upsertByMatch: fresh insert
+  db.enqueue([{ id: 't1' }]) // timeline add
+  const { app, events } = harnessWithDispatch(db)
+  const res = await app.request('/', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'Admin', phone: '+15035550142' }),
+  })
+  expect(res.status).toBe(201)
+  const tlCall = db.calls.find((c) => /INSERT INTO timeline_events/i.test(c.sql))
+  expect(tlCall?.params).toContain('contact_created')
+  expect(events).toHaveLength(1)
+  expect(events[0]).toMatchObject({ locationId: 'locA', triggerType: 'contact_created', contactId: 'c9' })
+})
+
+test('manual add matching an existing contact resolves silently (FIND-07)', async () => {
+  const db = new FakeDatabase()
+  db.enqueue([{ id: 'c9', phones: ['+15035550142'], emails: [], archived_at: null }]) // findByPhone -> live match
+  const { app, events } = harnessWithDispatch(db)
+  const res = await app.request('/', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ phone: '+15035550142' }),
+  })
+  expect(res.status).toBe(201)
+  expect(db.calls.some((c) => /INSERT INTO timeline_events/i.test(c.sql))).toBe(false)
+  expect(events).toEqual([])
 })
 
 test('rejects a create with no name, phone, or email before touching the db', async () => {

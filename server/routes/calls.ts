@@ -5,6 +5,7 @@ import { z } from 'zod'
 import type { AppEnv } from '../app-env'
 import type { Database } from '../db/database'
 import { callStats } from '../lib/call-math'
+import { FenceRefusal } from '../lib/sending/fence'
 import { resolveVoiceProvider } from '../lib/voice/resolve'
 import { CallsRepo } from '../repos/calls-repo'
 import { ContactsRepo } from '../repos/contacts-repo'
@@ -70,6 +71,9 @@ export function callsRoute(deps: {
     try {
       placed = await resolved.provider.placeCall({ to })
     } catch (err) {
+      // A fence refusal is an authorization outcome (403), not a provider
+      // failure — and its message names the policy, never the recipient.
+      if (err instanceof FenceRefusal) return c.json({ error: err.message }, 403)
       // Adapter errors carry the HTTP status, never the key — safe to surface.
       return c.json({ error: err instanceof Error ? err.message : 'call failed' }, 502)
     }
@@ -82,7 +86,8 @@ export function callsRoute(deps: {
       provider: placed.provider,
       externalId: placed.externalId,
     })
-    return c.json({ ok: true, call })
+    const simulated = placed.provider === 'sink'
+    return c.json({ ok: true, call, ...(simulated ? { simulated: true } : {}) })
   })
 
   return app

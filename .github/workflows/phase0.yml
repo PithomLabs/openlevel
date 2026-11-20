@@ -22,7 +22,7 @@ permissions:
   contents: read
 
 env:
-  NODE_VERSION: "22"
+  NODE_VERSION: "26"
 
 jobs:
   typecheck:
@@ -62,11 +62,9 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: mkdir -p phase0/evidence
       - name: full suite with JSON report
-        continue-on-error: true
+        # Fail-closed: the suite itself decides the job (the vault baseline
+        # exemption was removed with the FIND-11 root-cause fix).
         run: npx vitest run --reporter=default --reporter=json --outputFile=phase0/evidence/app-suite.json
-      - name: known-failure baseline gate
-        # Decides the job: passes only if failures exactly match the baseline.
-        run: node phase0/baseline-gate.mjs phase0/evidence/app-suite.json phase0/vault-baseline.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -1,8 +1,10 @@
+import { randomUUID } from 'node:crypto'
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
 import { z } from 'zod'
 import type { AppEnv } from '../app-env'
 import type { Database } from '../db/database'
+import type { WorkflowDispatch } from '../jobs/workflow-dispatcher'
 import { coerceCustomFieldValue } from '../lib/custom-field-key'
 import { ContactNotesRepo } from '../repos/contact-notes-repo'
 import { ContactTasksRepo } from '../repos/contact-tasks-repo'
@@ -92,7 +94,7 @@ const contactStateSchema = z.object({ state: z.string().trim().nullable() })
  * /:id/notes, and operator to-dos (the "Tasks" panel), nested at /:id/tasks.
  * Both are operator-only and never move money or send anything.
  */
-export function contactsRoute(deps: { db: Database }): Hono<AppEnv> {
+export function contactsRoute(deps: { db: Database; dispatch?: WorkflowDispatch }): Hono<AppEnv> {
   const app = new Hono<AppEnv>()
 
   app.get('/', async (c) => {
@@ -111,13 +113,31 @@ export function contactsRoute(deps: { db: Database }): Hono<AppEnv> {
   // the create path: a matching phone/email resolves to the existing row instead
   // of a duplicate, and a keyless contact inserts fresh. Source 'manual' marks it
   // operator-entered (vs. a Beeper/Chatwoot inbound). Never sends or charges.
+  // Entry convergence (FIND-07): a genuinely new contact gets the same timeline
+  // event and contact_created dispatch as the public capture paths; a match
+  // resolves silently (nothing happened beyond the lookup).
   app.post('/', zValidator('json', createContactSchema), async (c) => {
     const loc = c.get('locationId')
     const { name, phone, email } = c.req.valid('json')
-    const contact = await new ContactsRepo(deps.db, loc).upsertByMatch(
+    const { contact, created } = await new ContactsRepo(deps.db, loc).upsertByMatch(
       { name: name || undefined, phone: phone || undefined, email: email || undefined },
       'manual',
     )
+    if (created) {
+      await new TimelineRepo(deps.db, loc).add({
+        contactId: contact.id,
+        type: 'contact_created',
+        refTable: 'contacts',
+        refId: contact.id,
+        payload: { source: 'manual' },
+      })
+      await deps.dispatch?.({
+        locationId: loc,
+        triggerType: 'contact_created',
+        contactId: contact.id,
+        eventId: randomUUID(),
+      })
+    }
     return c.json({ ok: true, contact }, 201)
   })
 

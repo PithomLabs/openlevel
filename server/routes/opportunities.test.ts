@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import type { AppEnv } from '../app-env'
 import { FakeDatabase } from '../db/fake-database'
+import type { WorkflowEvent } from '../jobs/workflow-dispatcher'
 import { opportunitiesRoute } from './opportunities'
 
 function harness(db: FakeDatabase, locationId = 'locA') {
@@ -16,7 +17,7 @@ function harness(db: FakeDatabase, locationId = 'locA') {
 
 /** Like `harness`, but captures the workflow events the route dispatches. */
 function harnessWithDispatch(db: FakeDatabase, locationId = 'locA') {
-  const events: unknown[] = []
+  const events: WorkflowEvent[] = []
   const app = new Hono<AppEnv>()
   app.use('*', async (c, next) => {
     c.set('operatorId', 'op1')
@@ -94,9 +95,9 @@ test('POST / dispatches an opportunity_created event carrying the contact', asyn
   })
 
   expect(res.status).toBe(201)
-  expect(events).toEqual([
-    { locationId: 'locA', triggerType: 'opportunity_created', contactId: 'c7' },
-  ])
+  expect(events).toHaveLength(1)
+  expect(events[0]).toMatchObject({ locationId: 'locA', triggerType: 'opportunity_created', contactId: 'c7' })
+  expect(events[0]?.eventId).toMatch(/^[0-9a-f-]{36}$/)
 })
 
 test('POST / rejects a stage that does not belong to the pipeline (400)', async () => {

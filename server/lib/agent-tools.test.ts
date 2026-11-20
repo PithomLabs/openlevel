@@ -1,4 +1,5 @@
 import { FakeDatabase } from '../db/fake-database'
+import type { WorkflowEvent } from '../jobs/workflow-dispatcher'
 import type { Calendar } from '../repos/calendars-repo'
 import { buildAgentTools } from './agent-tools'
 
@@ -27,7 +28,7 @@ const MON_8AM = () => new Date('2026-06-08T12:00:00.000Z')
 
 function makeTools(over: Partial<Parameters<typeof buildAgentTools>[0]> = {}) {
   const db = new FakeDatabase()
-  const events: unknown[] = []
+  const events: WorkflowEvent[] = []
   const tools = buildAgentTools({
     db,
     locationId: 'locA',
@@ -161,8 +162,10 @@ test('book_appointment books the conversation contact, writes the timeline, and 
   // an appointment_booked timeline event was written
   const tlCall = db.calls.find((c) => /INSERT INTO timeline_events/i.test(c.sql))
   expect(tlCall?.params).toContain('appointment_booked')
-  // and the automation loop was driven
-  expect(events).toEqual([{ locationId: 'locA', triggerType: 'appointment_booked', contactId: 'c1' }])
+  // and the automation loop was driven with a stable event identity
+  expect(events).toHaveLength(1)
+  expect(events[0]).toMatchObject({ locationId: 'locA', triggerType: 'appointment_booked', contactId: 'c1' })
+  expect(events[0]?.eventId).toMatch(/^[0-9a-f-]{36}$/)
 })
 
 test('book_appointment refuses a time that is not actually open', async () => {

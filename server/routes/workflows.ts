@@ -52,6 +52,8 @@ const runSchema = z.object({ contactId: z.string().min(1).nullable().optional() 
 export function workflowsRoute(deps: {
   db: Database
   runWorkflow?: typeof realRunWorkflow
+  /** G1: manual test runs honor the wait kill-switch; unset = disabled. */
+  waitsEnabled?: boolean
 }): Hono<AppEnv> {
   const app = new Hono<AppEnv>()
   const runWorkflow = deps.runWorkflow ?? realRunWorkflow
@@ -104,7 +106,7 @@ export function workflowsRoute(deps: {
     if (!workflow) return c.json({ error: 'not found' }, 404)
 
     const run = await runWorkflow(
-      { db: deps.db },
+      { db: deps.db, waitsEnabled: deps.waitsEnabled ?? false },
       {
         locationId: loc,
         workflowId: id,

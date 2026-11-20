@@ -479,8 +479,14 @@ test('confirmOperatorWrite books the appointment end to end, location-scoped, wi
   expect(res).toMatchObject({ ok: true, status: 200 })
   expect(res.message).toMatch(/booked/i)
   const writes = db.calls.filter((q) => /INSERT|UPDATE|DELETE/i.test(q.sql))
-  expect(writes).toHaveLength(1)
+  // appointment row + appointment_booked timeline event (FIND-07 convergence)
+  // + outbox dispatch intent with the STABLE event id (R13-10).
+  expect(writes).toHaveLength(3)
   expect(writes[0]?.params[0]).toBe('locA')
+  expect(writes[1]?.sql).toMatch(/INSERT INTO timeline_events/i)
+  expect(writes[1]?.params).toContain('appointment_booked')
+  expect(writes[2]?.sql).toMatch(/INSERT INTO outbox/i)
+  expect(writes[2]?.params).toContain('booking:a1')
 })
 
 test('confirmOperatorWrite reports a double-booked slot gently instead of crashing', async () => {
@@ -623,6 +629,38 @@ test('confirmOperatorWrite sends the text to the DERIVED phone with the echoed n
   expect(calls[0]).toEqual({ e164: '+16025551234', body: 'Hi Jane', nonce: 'n1', state: '' })
 })
 
+test('send_text persists queued + outcome timeline rows around the rail call (FIND-07)', async () => {
+  const db = new FakeDatabase()
+  db.enqueue([TEXT_CONTACT]) // resolve read
+  db.enqueue([TEXT_CONTACT]) // perform read
+  const { fn } = fakeSendText({ ok: true, messageId: 'm-1' })
+  const res = await confirmOperatorWrite(
+    { db, locationId: 'locA', now: NOW, sendText: fn },
+    { verb: 'send_text', params: { contactId: 'c1', body: 'Hi Jane', nonce: 'n1' } },
+  )
+  expect(res.ok).toBe(true)
+  const tlWrites = db.calls.filter((q) => /INSERT INTO timeline_events/i.test(q.sql))
+  expect(tlWrites).toHaveLength(2)
+  expect(JSON.stringify(tlWrites[0]?.params)).toContain('queued')
+  expect(JSON.stringify(tlWrites[1]?.params)).toContain('sent')
+  expect(JSON.stringify(tlWrites[1]?.params)).toContain('n1')
+})
+
+test('send_text records the failure outcome instead of vanishing (FIND-07)', async () => {
+  const db = new FakeDatabase()
+  db.enqueue([TEXT_CONTACT]) // resolve read
+  db.enqueue([TEXT_CONTACT]) // perform read
+  const { fn } = fakeSendText({ ok: false, reason: 'failed' })
+  const res = await confirmOperatorWrite(
+    { db, locationId: 'locA', now: NOW, sendText: fn },
+    { verb: 'send_text', params: { contactId: 'c1', body: 'Hi Jane', nonce: 'n1' } },
+  )
+  expect(res.ok).toBe(true) // honest failure sentence, still a 200 confirm
+  const tlWrites = db.calls.filter((q) => /INSERT INTO timeline_events/i.test(q.sql))
+  expect(tlWrites).toHaveLength(2)
+  expect(JSON.stringify(tlWrites[1]?.params)).toContain('failed')
+})
+
 // THE HEART OF THE PER-STATE FEATURE: the contact's own US state must travel all
 // the way to the rail, because the gateway is the single legal authority that
 // turns that state into a texting window (8am-9pm in THAT state's timezone). If
@@ -701,6 +739,9 @@ test('confirmOperatorWrite maps each send failure reason to an honest, no-false-
     // text MAY have gone out. The copy must NOT claim "nothing was sent" (that would
     // be a lie if it did) — it tells the operator to check before retrying.
     { reason: 'failed', re: /couldn't confirm|could not confirm|check the thread/i },
+    // 'refused' is DETERMINISTIC (staging fence): nothing went out, so the copy
+    // truthfully says nothing was sent.
+    { reason: 'refused', re: /staging|approved test numbers|nothing was sent/i },
   ]
   for (const { reason, re } of table) {
     const db = new FakeDatabase()
@@ -720,6 +761,78 @@ test('confirmOperatorWrite maps each send failure reason to an honest, no-false-
     // only the reasons where the gateway refused BEFORE sending may say that.
     if (reason === 'failed') expect(res.message).not.toMatch(/nothing was sent/i)
   }
+})
+
+test('R13-02: staging send_text sinks even for allowlisted numbers — the gateway rail is never called', async () => {
+  const db = new FakeDatabase()
+  db.enqueue([TEXT_CONTACT]) // resolve read
+  db.enqueue([TEXT_CONTACT]) // perform read (prepareText)
+  db.enqueue([{ id: 't-queued' }]) // queued timeline row
+  db.enqueue([]) // sink INSERT (no rows)
+  db.enqueue([{ id: 't-outcome' }]) // outcome timeline row
+  const sendText = vi.fn(async (): Promise<SendTextResult> => ({ ok: true, messageId: 'gw-real' }))
+  const res = await confirmOperatorWrite(
+    {
+      db,
+      locationId: 'locA',
+      now: NOW,
+      sendText,
+      env: { APP_ENV: 'staging', STAGING_SINK_ALLOWLIST: '+16025551234' },
+    },
+    { verb: 'send_text', params: { contactId: 'c1', body: 'Hi', nonce: 'n1' } },
+  )
+  expect(sendText).not.toHaveBeenCalled()
+  expect(res).toMatchObject({ ok: true, status: 200 })
+  expect(res.message).toMatch(/simulat/i)
+  expect(res.message).not.toMatch(/\bsent your text\b/i)
+  const sinkCall = db.calls.find((q) => /INSERT INTO outbound_sink/i.test(q.sql))
+  expect(sinkCall?.params).toContain('sms')
+  expect(sinkCall?.params).toContain('+16025551234')
+})
+
+test('R13-02: staging send_text to a non-allowlisted number refuses without sinking or calling', async () => {
+  const db = new FakeDatabase()
+  db.enqueue([TEXT_CONTACT]) // resolve read
+  db.enqueue([TEXT_CONTACT]) // perform read (prepareText)
+  db.enqueue([{ id: 't-queued' }]) // queued timeline row
+  db.enqueue([{ id: 't-outcome' }]) // refused outcome row
+  const sendText = vi.fn(async (): Promise<SendTextResult> => ({ ok: true, messageId: 'gw-real' }))
+  const res = await confirmOperatorWrite(
+    {
+      db,
+      locationId: 'locA',
+      now: NOW,
+      sendText,
+      env: { APP_ENV: 'staging', STAGING_SINK_ALLOWLIST: '+19998887777' },
+    },
+    { verb: 'send_text', params: { contactId: 'c1', body: 'Hi', nonce: 'n1' } },
+  )
+  expect(sendText).not.toHaveBeenCalled()
+  expect(res.message).toMatch(/nothing was sent/i)
+  expect(db.calls.some((q) => /INSERT INTO outbound_sink/i.test(q.sql))).toBe(false)
+})
+
+test('R14-03: restricted production preview send_text refuses outright — no sink, no rail call', async () => {
+  const db = new FakeDatabase()
+  db.enqueue([TEXT_CONTACT]) // resolve read
+  db.enqueue([TEXT_CONTACT]) // perform read (prepareText)
+  db.enqueue([{ id: 't-queued' }]) // queued timeline row
+  db.enqueue([{ id: 't-outcome' }]) // refused outcome row
+  const sendText = vi.fn(async (): Promise<SendTextResult> => ({ ok: true, messageId: 'gw-real' }))
+  const res = await confirmOperatorWrite(
+    {
+      db,
+      locationId: 'locA',
+      now: NOW,
+      sendText,
+      env: { APP_ENV: 'production', RESTRICTED_PREVIEW: 'true' },
+    },
+    { verb: 'send_text', params: { contactId: 'c1', body: 'Hi', nonce: 'n1' } },
+  )
+  expect(sendText).not.toHaveBeenCalled()
+  expect(res.message).toMatch(/nothing was sent/i)
+  expect(res.message).toMatch(/preview|disabled/i)
+  expect(db.calls.some((q) => /INSERT INTO outbound_sink/i.test(q.sql))).toBe(false)
 })
 
 test('confirmOperatorWrite never silently succeeds when texting is not wired up on the server', async () => {

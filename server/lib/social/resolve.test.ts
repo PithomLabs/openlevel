@@ -143,4 +143,25 @@ describe('resolveSocialPublisher: edges', () => {
       reason: 'location not found',
     })
   })
+
+  it('staging refuses social publishing without touching settings or secrets', async () => {
+    process.env.ACME_FACEBOOK_PAGE_TOKEN = 'live-token'
+    const db = dbWithLocation({ social: { facebookPageId: 'p1' } })
+    expect(await resolveSocialPublisher(db, 'locA', 'facebook', { APP_ENV: 'staging' })).toEqual({
+      ok: false,
+      reason: 'social publishing is disabled in staging',
+    })
+    expect(db.calls).toHaveLength(0)
+  })
+
+  it('R14-03: restricted production preview refuses social publishing without touching settings or secrets', async () => {
+    process.env.ACME_FACEBOOK_PAGE_TOKEN = 'live-token'
+    const db = dbWithLocation({ social: { facebookPageId: 'p1' } })
+    const resolved = await resolveSocialPublisher(db, 'locA', 'facebook', {
+      APP_ENV: 'production',
+      RESTRICTED_PREVIEW: 'true',
+    })
+    expect(resolved.ok).toBe(false)
+    expect(db.calls).toHaveLength(0)
+  })
 })

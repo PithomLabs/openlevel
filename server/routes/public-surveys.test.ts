@@ -73,7 +73,7 @@ async function setup() {
   ])
 
   const dispatch = async (e: Parameters<typeof dispatchWorkflowEvent>[1]) => {
-    await dispatchWorkflowEvent({ db }, e)
+    await dispatchWorkflowEvent({ db, waitsEnabled: true }, e)
   }
   const app = new Hono<AppEnv>()
   app.route('/', publicSurveysRoute({ db, dispatch }))
@@ -197,4 +197,49 @@ test('POST submit is 404 for a draft (unpublished) survey', async () => {
     body: JSON.stringify({ values: { full_name: 'A', phone: '+1', address: 'x' } }),
   })
   expect(res.status).toBe(404)
+})
+
+test('keyed retry replays, but keyless identical answers stay distinct responses (§12, approval G3)', async () => {
+  const { app, db } = await setup()
+  const submit = (headers: Record<string, string> = {}) =>
+    app.request('/loc_test/seller-intake/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify({ values: { full_name: 'A', phone: '+1', address: 'x' } }),
+    })
+
+  // Identified retry: one logical submission.
+  expect((await submit({ 'Idempotency-Key': 'survey-retry-1' })).status).toBe(200)
+  const replayed = await submit({ 'Idempotency-Key': 'survey-retry-1' })
+  expect(await replayed.json()).toMatchObject({ deduped: true })
+  // Keyless identical answers: two legitimately distinct responses.
+  expect((await submit()).status).toBe(200)
+  expect((await submit()).status).toBe(200)
+  const rows = await db.query<{ n: number }>(
+    "SELECT count(*)::int AS n FROM timeline_events WHERE type = 'survey_submission'",
+  )
+  expect(rows[0]?.n).toBe(3)
+})
+
+test('R14-01: survey key reuse with different answers is a 409 conflict', async () => {
+  const { app } = await setup()
+  const submit = (address: string, headers: Record<string, string> = {}) =>
+    app.request('/loc_test/seller-intake/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify({ values: { full_name: 'A', phone: '+1', address } }),
+    })
+  expect((await submit('x', { 'Idempotency-Key': 'survey-clash-1' })).status).toBe(200)
+  const clash = await submit('y', { 'Idempotency-Key': 'survey-clash-1' })
+  expect(clash.status).toBe(409)
+})
+
+test('R14-01: survey rejects a malformed Idempotency-Key with 400', async () => {
+  const { app } = await setup()
+  const res = await app.request('/loc_test/seller-intake/submit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Idempotency-Key': 'x'.repeat(129) },
+    body: JSON.stringify({ values: { full_name: 'A', phone: '+1', address: 'x' } }),
+  })
+  expect(res.status).toBe(400)
 })

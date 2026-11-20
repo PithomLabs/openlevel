@@ -9,7 +9,7 @@
 # Secrets (P2_SYSTEM_DATABASE_URL, P2_APPLICATION_DATABASE_URL) are NEVER
 # baked in: they arrive via `fly secrets` at deploy time. ROLE and
 # P2_WORKER_ENTRY arrive via fly.toml [processes]/[env].
-FROM node:22-slim
+FROM node:26-slim
 
 WORKDIR /app
 

@@ -33,32 +33,172 @@ export interface ContactInput {
   externalIds?: Record<string, unknown>
 }
 
+/**
+ * Conservative identity refusal (R13-12): the match is ambiguous or unsafe
+ * to resolve automatically. Routes map this to a structured 409 — never a
+ * silent merge, split, restore, or dropped identifier. Contact ids are
+ * non-secret handles the operator uses to resolve the conflict explicitly.
+ */
+export class ContactIdentityConflict extends Error {
+  readonly status = 409
+  readonly code: 'archived_match' | 'identity_conflict'
+  readonly contactIds: string[]
+  constructor(code: 'archived_match' | 'identity_conflict', message: string, contactIds: string[]) {
+    super(message)
+    this.name = 'ContactIdentityConflict'
+    this.code = code
+    this.contactIds = contactIds
+  }
+}
+
 export class ContactsRepo extends LocationScopedRepo {
+  /** Independent phone lookup (includes archived — the caller decides).
+   *  Digit-free junk never matches (same guard as matchKey). */
+  async findByPhone(phone: string): Promise<Contact | undefined> {
+    const normalized = normalizePhone(phone)
+    if (!/\d/.test(normalized)) return undefined
+    const rows = await this.scopedSelect<Contact>('SELECT * FROM contacts WHERE $2 = ANY(phones) LIMIT 1', [normalized])
+    return rows[0]
+  }
+
+  /** Independent email lookup (includes archived — the caller decides). */
+  async findByEmail(email: string): Promise<Contact | undefined> {
+    const normalized = normalizeEmail(email)
+    if (!normalized) return undefined
+    const rows = await this.scopedSelect<Contact>('SELECT * FROM contacts WHERE $2 = ANY(emails) LIMIT 1', [normalized])
+    return rows[0]
+  }
   /**
-   * Find a contact by its location-scoped match key, or insert a new one, in one
-   * atomic statement. SELECT-then-INSERT races: two inbound webhooks for the same
-   * phone both miss the lookup and both insert, and the contacts_match_key unique
-   * index then turns the loser into a 500. The ON CONFLICT collapses that to one
-   * row - the no-op DO UPDATE makes the existing row eligible for RETURNING, so the
-   * loser gets it back. The conflict arbiter is the partial index (match_key IS NOT
-   * NULL), so a keyless anonymous contact (no phone/email) never conflicts and
-   * always inserts fresh. The existing contact's name/phones/emails are preserved -
-   * a sparser later webhook never clobbers richer earlier data.
+   * Upsert by identity with conservative conflict refusal (R13-12): phone and
+   * email are looked up INDEPENDENTLY, then reconciled — the single
+   * phone-preferred match_key can no longer silently merge two contacts or
+   * reuse an archived one.
+   *
+   * - Different contacts for phone vs email → identity_conflict (no merge).
+   * - Any match on an archived contact → archived_match (no silent reuse,
+   *   no duplicate under the same identity, no auto-restore).
+   * - Compatible enrichment only: a new identifier is added only when the
+   *   record lacks that identifier kind entirely AND no other contact holds
+   *   it; a populated-different identifier is a conflict, never a silent
+   *   add-or-drop.
+   * - Keyless input (no usable phone/email) always inserts fresh, as before.
+   *
+   * `created` is true only when this call inserted (xmax idiom), so entry
+   * points fire contact_created exactly once per contact. SELECT-then-INSERT
+   * races still collapse on the match_key unique index; a race loser
+   * re-validates against the winner's row (same enrich/conflict rules), so a
+   * concurrent conflicting submit 409s instead of merging. Cross-key races
+   * (twins inserting different keys for one person) can still split rows —
+   * the conflict surface makes the split visible and resolvable on the next
+   * submit; serializing all upserts per location was judged disproportionate.
    */
-  async upsertByMatch(input: ContactInput, source: string): Promise<Contact> {
+  async upsertByMatch(input: ContactInput, source: string): Promise<{ contact: Contact; created: boolean }> {
+    const phone = input.phone ? normalizePhone(input.phone) : ''
+    const email = input.email ? normalizeEmail(input.email) : ''
+    const byPhone = input.phone ? await this.findByPhone(input.phone) : undefined
+    const byEmail = input.email ? await this.findByEmail(input.email) : undefined
+    if (byPhone && byEmail && byPhone.id !== byEmail.id) {
+      throw new ContactIdentityConflict(
+        'identity_conflict',
+        'This phone number and email address belong to two different contacts — resolve them explicitly instead of merging.',
+        [byPhone.id, byEmail.id],
+      )
+    }
+    const target = byPhone ?? byEmail
+    if (target?.archived_at) {
+      throw new ContactIdentityConflict(
+        'archived_match',
+        'This submission matches an archived contact — restore it explicitly instead of reusing or duplicating it.',
+        [target.id],
+      )
+    }
+    if (target) return { contact: await this.reconcileOrThrow(target, input), created: false }
     const key = matchKey(this.locationId, input)
     const id = nanoid()
-    const phones = input.phone ? [normalizePhone(input.phone)] : []
-    const emails = input.email ? [normalizeEmail(input.email)] : []
-    const rows = await this.db.query<Contact>(
+    const phones = input.phone && /\d/.test(phone) ? [phone] : []
+    const emails = email ? [email] : []
+    const rows = await this.db.query<Contact & { created: boolean }>(
       `INSERT INTO contacts (id, location_id, name, phones, emails, match_key, source, external_ids)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
        ON CONFLICT (location_id, match_key) WHERE match_key IS NOT NULL
        DO UPDATE SET match_key = EXCLUDED.match_key
-       RETURNING *`,
+       RETURNING *, (xmax = 0) AS created`,
       [id, this.locationId, input.name ?? null, phones, emails, key, source, input.externalIds ?? {}],
     )
-    return rows[0]!
+    const row = rows[0]!
+    const { created, ...contact } = row
+    if (created !== true) {
+      // Lost an exact-key race: the winner's row came back. Re-validate our
+      // identifiers against it — a conflicting twin errors instead of merging.
+      return { contact: await this.reconcileOrThrow(contact, input), created: false }
+    }
+    return { contact, created: true }
+  }
+
+  /**
+   * Validate input identifiers against an existing row: compatible records
+   * enrich (missing identifier kind only, uniqueness re-verified), anything
+   * else conflicts. Never merges, drops, or overwrites populated data.
+   */
+  private async reconcileOrThrow(known: Contact, input: ContactInput): Promise<Contact> {
+    if (known.archived_at) {
+      throw new ContactIdentityConflict(
+        'archived_match',
+        'This submission matches an archived contact — restore it explicitly instead of reusing or duplicating it.',
+        [known.id],
+      )
+    }
+    const phone = input.phone ? normalizePhone(input.phone) : ''
+    const email = input.email ? normalizeEmail(input.email) : ''
+    const phoneKnown = !phone || phone === '' || !/\d/.test(phone) || known.phones.includes(phone)
+    const emailKnown = !email || known.emails.includes(email)
+    if (!phoneKnown && known.phones.length > 0) {
+      throw new ContactIdentityConflict(
+        'identity_conflict',
+        'This submission carries a phone number that does not match the known contact — resolve it explicitly.',
+        [known.id],
+      )
+    }
+    if (!emailKnown && known.emails.length > 0) {
+      throw new ContactIdentityConflict(
+        'identity_conflict',
+        'This submission carries an email address that does not match the known contact — resolve it explicitly.',
+        [known.id],
+      )
+    }
+    // Enrich only the missing kind, re-verifying uniqueness first (a twin may
+    // have claimed it since our lookup).
+    if (!phoneKnown && known.phones.length === 0) {
+      const rival = await this.findByPhone(phone)
+      if (rival && rival.id !== known.id) {
+        throw new ContactIdentityConflict('identity_conflict', 'This phone number was just claimed by another contact.', [
+          known.id,
+          rival.id,
+        ])
+      }
+      const rows = await this.db.query<Contact>(
+        `UPDATE contacts SET phones = array_append(phones, $2), updated_at = now()
+         WHERE id = $1 AND location_id = $3 AND NOT ($2 = ANY(phones)) RETURNING *`,
+        [known.id, phone, this.locationId],
+      )
+      return rows[0] ?? known
+    }
+    if (!emailKnown && known.emails.length === 0) {
+      const rival = await this.findByEmail(email)
+      if (rival && rival.id !== known.id) {
+        throw new ContactIdentityConflict('identity_conflict', 'This email address was just claimed by another contact.', [
+          known.id,
+          rival.id,
+        ])
+      }
+      const rows = await this.db.query<Contact>(
+        `UPDATE contacts SET emails = array_append(emails, $2), updated_at = now()
+         WHERE id = $1 AND location_id = $3 AND NOT ($2 = ANY(emails)) RETURNING *`,
+        [known.id, email, this.locationId],
+      )
+      return rows[0] ?? known
+    }
+    return known
   }
 
   list(limit = 50): Promise<Contact[]> {

@@ -1,33 +1,55 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { PGlite } from '@electric-sql/pglite'
 import { FakeDatabase } from '../db/fake-database'
+import { PgliteDatabase } from '../db/pglite-database'
 import { ContactsRepo } from './contacts-repo'
 
-test('upsertByMatch inserts a new contact in one atomic statement, scoped to the location', async () => {
+test('upsertByMatch looks up identifiers independently, then inserts once (R13-12)', async () => {
   const db = new FakeDatabase()
-  db.enqueue([{ id: 'new', location_id: 'locA' }]) // one INSERT ... ON CONFLICT RETURNING
+  db.enqueue([]) // findByPhone -> no match
+  db.enqueue([{ id: 'new', location_id: 'locA', created: true }]) // INSERT ... ON CONFLICT RETURNING
   const repo = new ContactsRepo(db, 'locA')
-  const c = await repo.upsertByMatch({ name: 'Bob', phone: '5035550199' }, 'chatwoot')
+  const { contact: c, created } = await repo.upsertByMatch({ name: 'Bob', phone: '5035550199' }, 'chatwoot')
   expect(c.id).toBe('new')
-  expect(db.calls).toHaveLength(1) // no SELECT-then-INSERT race window
-  expect(db.calls[0]?.params[1]).toBe('locA') // $2 = location_id ($1 is id)
-  expect(db.calls[0]?.sql).toMatch(/ON CONFLICT \(location_id, match_key\)/i)
+  expect(created).toBe(true)
+  expect(db.calls[0]?.sql).toMatch(/ANY\(phones\)/i)
+  expect(db.calls[0]?.params[0]).toBe('locA')
+  expect(db.calls[1]?.sql).toMatch(/ON CONFLICT \(location_id, match_key\)/i)
+  expect(db.calls[1]?.sql).toMatch(/xmax = 0/i) // atomic created-flag detection
 })
 
-test('upsertByMatch returns the existing contact when match_key already present', async () => {
+test('upsertByMatch resolves to the phone match without inserting (R13-12)', async () => {
   const db = new FakeDatabase()
-  db.enqueue([{ id: 'existing', location_id: 'locA' }]) // ON CONFLICT DO UPDATE RETURNING hands back the existing row
+  db.enqueue([{ id: 'existing', location_id: 'locA', phones: ['+15035550199'], emails: [], archived_at: null }])
   const repo = new ContactsRepo(db, 'locA')
-  const c = await repo.upsertByMatch({ phone: '5035550199' }, 'chatwoot')
+  const { contact: c, created } = await repo.upsertByMatch({ phone: '5035550199' }, 'chatwoot')
   expect(c.id).toBe('existing')
-  expect(db.calls).toHaveLength(1)
+  expect(created).toBe(false)
+  expect(db.calls).toHaveLength(1) // lookup only; no write for a clean match
 })
 
 test('upsertByMatch with no phone/email still inserts (anonymous contact)', async () => {
   const db = new FakeDatabase()
-  db.enqueue([{ id: 'anon', location_id: 'locA' }]) // null match_key never matches the partial index -> always inserts
+  db.enqueue([{ id: 'anon', location_id: 'locA', created: true }]) // null match_key never matches the partial index -> always inserts
   const repo = new ContactsRepo(db, 'locA')
-  const c = await repo.upsertByMatch({ name: 'No Contact Info' }, 'manual')
+  const { contact: c, created } = await repo.upsertByMatch({ name: 'No Contact Info' }, 'manual')
   expect(c.id).toBe('anon')
+  expect(created).toBe(true)
   expect(db.calls).toHaveLength(1)
+})
+
+test('upsertByMatch created flag is true on insert, false on match (real Postgres)', async () => {
+  const pg = new PGlite()
+  await pg.exec(readFileSync(fileURLToPath(new URL('../../db/schema.sql', import.meta.url)), 'utf8'))
+  const db = new PgliteDatabase(pg)
+  await db.query("INSERT INTO locations (id, name, slug) VALUES ('locA','A','a')")
+  const repo = new ContactsRepo(db, 'locA')
+  const first = await repo.upsertByMatch({ name: 'Bob', phone: '5035550199' }, 'chatwoot')
+  expect(first.created).toBe(true)
+  const second = await repo.upsertByMatch({ phone: '5035550199' }, 'manual')
+  expect(second.contact.id).toBe(first.contact.id)
+  expect(second.created).toBe(false)
 })
 
 test('listByTag scopes to location and filters on tag membership', async () => {
@@ -208,4 +230,118 @@ test('setState returns undefined when the contact is not in this location', asyn
 
   const c = await repo.setState('missing', 'AZ')
   expect(c).toBeUndefined()
+})
+
+describe('R13-12 identity policy (real Postgres)', () => {
+  async function setup() {
+    const pg = new PGlite()
+    await pg.exec(readFileSync(fileURLToPath(new URL('../../db/schema.sql', import.meta.url)), 'utf8'))
+    const db = new PgliteDatabase(pg)
+    await db.query("INSERT INTO locations (id, name, slug) VALUES ('locA','A','a')")
+    return new ContactsRepo(db, 'locA')
+  }
+
+  async function seed(repo: ContactsRepo, over: Record<string, unknown> = {}) {
+    const db = (repo as unknown as { db: PgliteDatabase }).db
+    const id = `c${Math.floor(Math.random() * 1e9)}`
+    await db.query(
+      `INSERT INTO contacts (id, location_id, name, phones, emails, match_key, archived_at)
+       VALUES ($1, 'locA', 'Seed', $2, $3, $4, $5)`,
+      [
+        id,
+        (over.phones as string[] | undefined) ?? [],
+        (over.emails as string[] | undefined) ?? [],
+        (over.match_key as string | undefined) ?? null,
+        (over.archived_at as string | undefined) ?? null,
+      ],
+    )
+    return id
+  }
+
+  test('archived contact matched by email refuses without reusing or duplicating', async () => {
+    const repo = await setup()
+    const db = (repo as unknown as { db: PgliteDatabase }).db
+    const id = await seed(repo, { emails: ['arch@example.com'], archived_at: '2026-01-01T00:00:00Z' })
+    await expect(repo.upsertByMatch({ email: 'arch@example.com' }, 'form')).rejects.toMatchObject({
+      name: 'ContactIdentityConflict',
+      code: 'archived_match',
+      contactIds: [id],
+    })
+    const rows = await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM contacts WHERE location_id = 'locA'`)
+    expect(rows[0]?.n).toBe(1)
+  })
+
+  test('archived contact matched by phone refuses without reusing or duplicating', async () => {
+    const repo = await setup()
+    const db = (repo as unknown as { db: PgliteDatabase }).db
+    const id = await seed(repo, { phones: ['+16025550100'], archived_at: '2026-01-01T00:00:00Z' })
+    await expect(repo.upsertByMatch({ phone: '+16025550100' }, 'form')).rejects.toMatchObject({
+      name: 'ContactIdentityConflict',
+      code: 'archived_match',
+      contactIds: [id],
+    })
+    const rows = await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM contacts WHERE location_id = 'locA'`)
+    expect(rows[0]?.n).toBe(1)
+  })
+
+  test('same phone and same email on one contact resolves cleanly', async () => {
+    const repo = await setup()
+    const id = await seed(repo, { phones: ['+16025550101'], emails: ['same@example.com'] })
+    const out = await repo.upsertByMatch({ phone: '+16025550101', email: 'same@example.com' }, 'form')
+    expect(out.contact.id).toBe(id)
+    expect(out.created).toBe(false)
+  })
+
+  test('same phone but a different populated email is a conflict (no silent drop/add)', async () => {
+    const repo = await setup()
+    await seed(repo, { phones: ['+16025550102'], emails: ['original@example.com'] })
+    await expect(
+      repo.upsertByMatch({ phone: '+16025550102', email: 'intruder@example.com' }, 'form'),
+    ).rejects.toMatchObject({ name: 'ContactIdentityConflict', code: 'identity_conflict' })
+  })
+
+  test('same email but a different populated phone is a conflict', async () => {
+    const repo = await setup()
+    await seed(repo, { phones: ['+16025550103'], emails: ['stable@example.com'] })
+    await expect(
+      repo.upsertByMatch({ phone: '+19998887777', email: 'stable@example.com' }, 'form'),
+    ).rejects.toMatchObject({ name: 'ContactIdentityConflict', code: 'identity_conflict' })
+  })
+
+  test('phone and email resolving to different records is a conflict naming both', async () => {
+    const repo = await setup()
+    const a = await seed(repo, { phones: ['+16025550104'] })
+    const b = await seed(repo, { emails: ['split@example.com'] })
+    await expect(
+      repo.upsertByMatch({ phone: '+16025550104', email: 'split@example.com' }, 'form'),
+    ).rejects.toMatchObject({ name: 'ContactIdentityConflict', code: 'identity_conflict', contactIds: [a, b] })
+  })
+
+  test('new email enriches a contact that has no email', async () => {
+    const repo = await setup()
+    const id = await seed(repo, { phones: ['+16025550105'] })
+    const out = await repo.upsertByMatch({ phone: '+16025550105', email: 'fresh@example.com' }, 'form')
+    expect(out.contact.id).toBe(id)
+    expect(out.created).toBe(false)
+    expect(out.contact.emails).toContain('fresh@example.com')
+  })
+
+  test('new phone enriches a contact that has no phone', async () => {
+    const repo = await setup()
+    const id = await seed(repo, { emails: ['lonely@example.com'] })
+    const out = await repo.upsertByMatch({ phone: '+16025550106', email: 'lonely@example.com' }, 'form')
+    expect(out.contact.id).toBe(id)
+    expect(out.contact.phones).toContain('+16025550106')
+  })
+
+  test('same identifiers in another location insert independently (cross-tenant)', async () => {
+    const repo = await setup()
+    const db = (repo as unknown as { db: PgliteDatabase }).db
+    await db.query("INSERT INTO locations (id, name, slug) VALUES ('locB','B','b')")
+    const a = await repo.upsertByMatch({ phone: '+16025550107', email: 'cross@example.com' }, 'form')
+    const b = await new ContactsRepo(db, 'locB').upsertByMatch({ phone: '+16025550107', email: 'cross@example.com' }, 'form')
+    expect(a.created).toBe(true)
+    expect(b.created).toBe(true)
+    expect(a.contact.id).not.toBe(b.contact.id)
+  })
 })

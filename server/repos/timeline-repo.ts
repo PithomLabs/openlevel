@@ -31,6 +31,25 @@ export class TimelineRepo extends LocationScopedRepo {
     return rows[0]!
   }
 
+  /**
+   * Idempotent insert for at-least-once executors (DBOS pilot): the caller
+   * supplies a deterministic id (one business operation = one id). A twin
+   * execution converges on the existing row instead of duplicating it.
+   */
+  async addIdempotent(input: TimelineInput & { id: string }): Promise<TimelineEvent> {
+    const rows = await this.db.query<TimelineEvent>(
+      `INSERT INTO timeline_events (id, location_id, contact_id, type, ref_table, ref_id, payload)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       ON CONFLICT (id) DO NOTHING
+       RETURNING *`,
+      [input.id, this.locationId, input.contactId, input.type, input.refTable ?? null, input.refId ?? null, input.payload ?? {}],
+    )
+    if (rows[0]) return rows[0]
+    const existing = await this.scopedSelect<TimelineEvent>('SELECT * FROM timeline_events WHERE id=$2', [input.id])
+    if (!existing[0]) throw new Error('timeline idempotent insert lost its row')
+    return existing[0]
+  }
+
   listByContact(contactId: string, limit = 100): Promise<TimelineEvent[]> {
     return this.scopedSelect<TimelineEvent>(
       'SELECT * FROM timeline_events WHERE contact_id=$2 ORDER BY occurred_at DESC LIMIT $3',

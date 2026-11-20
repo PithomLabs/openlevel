@@ -1,15 +1,23 @@
 import { nanoid } from 'nanoid'
 import type { Database } from '../db/database'
+import type { WorkflowDispatch } from '../jobs/workflow-dispatcher'
 import { AppointmentsRepo } from '../repos/appointments-repo'
 import { CalendarsRepo } from '../repos/calendars-repo'
 import { ContactsRepo } from '../repos/contacts-repo'
 import { ContactTasksRepo } from '../repos/contact-tasks-repo'
 import { OpportunitiesRepo } from '../repos/opportunities-repo'
+import { OutboxRepo } from '../repos/outbox-repo'
 import { PipelinesRepo } from '../repos/pipelines-repo'
+import { TimelineRepo } from '../repos/timeline-repo'
 import type { AnthropicTool } from './anthropic'
 import type { ToolCall, ToolResult } from './agent-runner'
 import { isUniqueViolation } from './db-errors'
 import { normalizePhone } from './contact-match'
+import { completeIdempotencyKey, withIdempotency } from './idempotency'
+import { reportError } from './secrets'
+import { FenceRefusal, assertSinkRecipient } from './sending/fence'
+import { sideEffectPolicyFromEnv } from './sending/policy'
+import { recordSinkMessage } from './sending/sink'
 
 /**
  * The operator assistant's tool surface for ONE location — the only door between
@@ -41,7 +49,14 @@ export type SendTextResult =
   | { ok: true; messageId: string; deduped?: boolean }
   | {
       ok: false
-      reason: 'outside_window' | 'unknown_state' | 'not_configured' | 'bad_phone' | 'in_flight' | 'failed'
+      reason:
+        | 'outside_window'
+        | 'unknown_state'
+        | 'not_configured'
+        | 'bad_phone'
+        | 'in_flight'
+        | 'failed'
+        | 'refused'
       detail?: string
     }
 
@@ -328,6 +343,9 @@ interface WriteOpsDeps {
   locationId: string
   now: () => Date
   sendText?: SendTextFn
+  dispatch?: WorkflowDispatch
+  /** Injectable env for the staging fence (tests pin it; production passes nothing). */
+  env?: Record<string, string | undefined>
 }
 
 /**
@@ -339,13 +357,14 @@ interface WriteOpsDeps {
  * what the proposal claimed, so a target deleted between propose and confirm is
  * caught rather than blindly written.
  */
-function makeWriteOps({ db, locationId, sendText }: WriteOpsDeps) {
+function makeWriteOps({ db, locationId, sendText, dispatch, env }: WriteOpsDeps) {
   const contacts = new ContactsRepo(db, locationId)
   const tasks = new ContactTasksRepo(db, locationId)
   const opps = new OpportunitiesRepo(db, locationId)
   const pipelines = new PipelinesRepo(db, locationId)
   const appointments = new AppointmentsRepo(db, locationId)
   const calendars = new CalendarsRepo(db, locationId)
+  const timeline = new TimelineRepo(db, locationId)
 
   /**
    * Read-only derivation shared by BOTH the propose pass and the confirm pass:
@@ -539,6 +558,33 @@ function makeWriteOps({ db, locationId, sendText }: WriteOpsDeps) {
             endsAt: prep.endsAt,
             notes: notes || null,
           })
+          // Entry convergence (FIND-07): same timeline event + dispatch as
+          // every other booking path, so operator-confirmed bookings drive
+          // appointment_booked automations instead of vanishing silently.
+          await timeline.add({
+            contactId: prep.contactId,
+            type: 'appointment_booked',
+            refTable: 'appointments',
+            refId: appt.id,
+            payload: { calendar: prep.calName, start: appt.starts_at },
+          })
+          // R13-10: the dispatch intent commits WITH the booking (in-txn when
+          // the confirm is keyed) under a STABLE event id, so a redelivered
+          // dispatch converges instead of double-firing automations.
+          const eventId = `booking:${appt.id}`
+          await new OutboxRepo(db, locationId).insert({
+            id: eventId,
+            aggregate: 'appointment',
+            aggregateId: appt.id,
+            event: 'appointment_booked',
+            payload: { contactId: prep.contactId },
+          })
+          await dispatch?.({
+            locationId,
+            triggerType: 'appointment_booked',
+            contactId: prep.contactId,
+            eventId,
+          })
           return `Booked "${appt.title}" for ${prep.when}.`
         } catch (err) {
           // A double-book is a benign conflict, not a fault: report it plainly and
@@ -584,10 +630,57 @@ function makeWriteOps({ db, locationId, sendText }: WriteOpsDeps) {
         if (!prep.ok) return prep.error // contact or phone vanished between propose and confirm
         const nonce = str(params.nonce)
         if (!sendText) return "Texting isn't set up on this server yet, so nothing was sent."
-        // The contact's state goes to the gateway, which turns it into the legal
-        // texting window. An empty state comes back as unknown_state below.
-        const result = await sendText(prep.e164, prep.body, nonce, prep.state)
+        // Persist the attempt BEFORE sending (FIND-07): a crash between the
+        // rail call and our bookkeeping must leave a queued row, never a
+        // silent gap. The gateway nonce still dedups redelivery.
+        await timeline.add({
+          contactId: prep.contactId,
+          type: 'outbound_text',
+          payload: { direction: 'outbound', body: prep.body, status: 'queued', nonce },
+        })
+        // Central side-effect policy (R13-02, R14-03): in staging the rail
+        // is NEVER consulted — the text sinks first (allowlisted recipients
+        // only), so no gateway transmission can occur regardless of how the
+        // rail is configured. In restricted preview / under a malformed
+        // identity the send REFUSES outright. A failed sink propagates —
+        // never falls through to the live rail.
+        const policy = sideEffectPolicyFromEnv(env ?? process.env)
+        const fence = { sink: policy.mode === 'sink', allowlist: policy.allowlist }
+        let result: SendTextResult
+        let simulated = false
+        if (policy.mode === 'sink') {
+          try {
+            assertSinkRecipient(fence, prep.e164)
+            const recorded = await recordSinkMessage(db, locationId, {
+              channel: 'sms',
+              recipient: prep.e164,
+              body: prep.body,
+            })
+            result = { ok: true, messageId: recorded.externalId }
+            simulated = true
+          } catch (err) {
+            if (!(err instanceof FenceRefusal)) throw err
+            result = { ok: false, reason: 'refused', detail: err.message }
+          }
+        } else if (policy.mode === 'refuse') {
+          result = { ok: false, reason: 'refused', detail: policy.reason }
+        } else {
+          // The contact's state goes to the gateway, which turns it into the legal
+          // texting window. An empty state comes back as unknown_state below.
+          result = await sendText(prep.e164, prep.body, nonce, prep.state)
+        }
+        await timeline.add({
+          contactId: prep.contactId,
+          type: 'outbound_text',
+          payload: {
+            direction: 'outbound',
+            status: simulated ? 'simulated' : result.ok ? (result.deduped ? 'deduped' : 'sent') : 'failed',
+            ...(result.ok ? {} : { reason: result.reason }),
+            nonce,
+          },
+        })
         if (result.ok) {
+          if (simulated) return `Simulated text to ${prep.who} (staging sink — nothing left the system).`
           return result.deduped
             ? `That text to ${prep.who} was already sent, so I didn't send it again.`
             : `Sent your text to ${prep.who}.`
@@ -605,6 +698,14 @@ function makeWriteOps({ db, locationId, sendText }: WriteOpsDeps) {
             return `${prep.who}'s phone number doesn't look like one I can text, so nothing was sent.`
           case 'in_flight':
             return `That text to ${prep.who} is already going out, so I didn't send it twice. Check the thread to confirm it landed.`
+          case 'refused':
+            // DETERMINISTIC pre-send refusal: nothing went out, so — unlike
+            // 'failed' — "nothing was sent" is the truth. Staging keeps its
+            // specific copy; preview/malformed surface the policy reason.
+            if (policy.mode === 'sink') {
+              return `Staging only allows texts to approved test numbers, so nothing was sent to ${prep.who}.`
+            }
+            return `Nothing was sent to ${prep.who} (${result.detail ?? 'sending is disabled in this environment'}).`
           case 'failed':
           default:
             // AMBIGUOUS: the rail couldn't get a clear answer, so the text may or
@@ -793,6 +894,16 @@ export interface ConfirmDeps {
   locationId: string
   now?: () => Date
   sendText?: SendTextFn
+  dispatch?: WorkflowDispatch
+  /** Injectable env for the staging fence (tests pin it; production passes nothing). */
+  env?: Record<string, string | undefined>
+  /**
+   * Who is confirming (R14-02): the operator id on the UI path, 'federation'
+   * on the gateway path. Bound into the idempotency payload so a key string
+   * reused across actors conflicts instead of cross-replaying one actor's
+   * result to another.
+   */
+  actor?: string
 }
 
 /** The action to perform, exactly as the proposal recorded it. The proposal's id
@@ -810,20 +921,105 @@ export interface ConfirmResult {
 }
 
 /**
- * Perform ONE proposed write, statelessly — the only path in the whole assistant
- * that mutates. It re-validates the verb against the write allowlist (a forged
+ * Perform ONE proposed write — the only path in the whole assistant that
+ * mutates. It re-validates the verb against the write allowlist (a forged
  * verb is refused), re-resolves {verb, params} against the live DB (a target
- * deleted since the proposal is caught here, not blindly written), then performs
- * the single write. There is no proposal store: the proposal's id was a UI handle
- * only, and trust lives entirely in this server-side re-resolution.
+ * deleted since the proposal is caught here, not blindly written), then
+ * performs the single write. There is no proposal store: trust lives
+ * entirely in server-side re-resolution.
+ *
+ * Idempotency (R13-10): callers pass a stable key (federation: the
+ * proposalRef; assistant: Idempotency-Key header) and one logical proposal
+ * confirms exactly once — retries replay the recorded message, concurrent
+ * twins collapse, contradictory payloads 409. Unkeyed calls keep the legacy
+ * execute-once behavior. Per-verb stale-takeover contracts (approval G1 —
+ * a key alone never proves safety):
+ *
+ * - book_appointment: txn(appointment + timeline + outbox intent +
+ *   completion) with a STABLE dispatch id; post-commit fast dispatch (the
+ *   sweeper covers a crash between commit and dispatch; the dispatcher
+ *   dedups redelivery). Takeover implies no commit — safe.
+ * - tag/untag/move/set_status: txn(mutation + completion); the mutations
+ *   are idempotent by nature (re-setting converges). Safe.
+ * - create_task: txn(insert + completion). Takeover implies no commit. Safe.
+ * - send_text: NO txn around the gateway call (a DB txn must never span an
+ *   HTTP call); safety comes from the proposal-carried nonce the gateway
+ *   dedups on, plus queued/outcome timeline rows per attempt. Completion is
+ *   recorded after the call (campaign pattern). Safe: effects dedup by
+ *   nonce; bookkeeping appends honestly per attempt.
+ *
+ * Residual bound (shared with N4): a takeover racing a still-running
+ * attempt past the stale horizon re-executes; verbs converge by the
+ * mechanisms above, but the race itself needs a >60s stall to trigger.
  */
-export async function confirmOperatorWrite(deps: ConfirmDeps, action: ConfirmInput): Promise<ConfirmResult> {
+export async function confirmOperatorWrite(
+  deps: ConfirmDeps,
+  action: ConfirmInput,
+  opts: { idempotencyKey?: string } = {},
+): Promise<ConfirmResult> {
   const now = deps.now ?? (() => new Date())
   if (!(WRITE_TOOLS as readonly string[]).includes(action.verb)) {
     return { ok: false, status: 400, message: `Unknown action "${action.verb}". Nothing was changed.` }
   }
-  const ops = makeWriteOps({ db: deps.db, locationId: deps.locationId, now, sendText: deps.sendText })
+  const ops = makeWriteOps({
+    db: deps.db,
+    locationId: deps.locationId,
+    now,
+    sendText: deps.sendText,
+    dispatch: deps.dispatch,
+    env: deps.env,
+  })
   const r = await ops.resolve(action.verb, action.params ?? {}, 'confirm')
   if (!r.ok) return { ok: false, status: 400, message: r.error }
-  return { ok: true, status: 200, message: await ops.perform(action.verb, r.params) }
+  if (!opts.idempotencyKey) {
+    return { ok: true, status: 200, message: await ops.perform(action.verb, r.params) }
+  }
+  // R14-02: the key binds to (tenant, operation, actor, canonical params).
+  // The `v` versions the payload shape so a future binding change is a
+  // deliberate migration, not a silent replay break. Note the operation name
+  // is intentionally UNCHANGED across this binding change: a pre-change
+  // completed row met post-change hashes to a safe 409 (no double write),
+  // while a renamed operation would re-execute. Proposals are short-lived
+  // and this ships pre-production, so no live replays are stranded.
+  const scope = {
+    locationId: deps.locationId,
+    operation: 'operator-confirm',
+    key: opts.idempotencyKey,
+    payload: { v: 1, actor: deps.actor ?? null, verb: action.verb, params: r.params },
+  }
+  if (action.verb === 'send_text') {
+    // External-effect verb: no DB txn around the gateway call (see contract
+    // above). withIdempotency records completion after; the nonce dedups.
+    const { result } = await withIdempotency(deps.db, scope, () => ops.perform(action.verb, r.params))
+    return { ok: true, status: 200, message: result }
+  }
+  // Database verbs: mutation + completion commit atomically; dispatches are
+  // collected in-txn (intents) and fired fast post-commit (sweeper covers).
+  const collected: Parameters<NonNullable<ConfirmDeps['dispatch']>>[0][] = []
+  const { result: message } = await withIdempotency(deps.db, scope, () =>
+    deps.db.withTransaction(async (tx) => {
+      const txOps = makeWriteOps({
+        db: tx,
+        locationId: deps.locationId,
+        now,
+        sendText: deps.sendText,
+        dispatch: (e) => void collected.push(e),
+        env: deps.env,
+      })
+      const msg = await txOps.perform(action.verb, r.params)
+      await completeIdempotencyKey(tx, scope, msg)
+      return msg
+    }),
+  )
+  for (const event of collected) {
+    try {
+      await deps.dispatch?.(event)
+    } catch (err) {
+      // Fast dispatch is best-effort: the outbox intent committed with the
+      // write, so the sweeper delivers what this misses. Never fail the
+      // confirm for a dispatch fault after a committed mutation.
+      reportError('confirm-fast-dispatch', err)
+    }
+  }
+  return { ok: true, status: 200, message }
 }

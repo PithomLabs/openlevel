@@ -1,14 +1,19 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { PGlite } from '@electric-sql/pglite'
 import { Hono } from 'hono'
 import type { AppEnv } from '../app-env'
+import type { Database } from '../db/database'
+import { FakeDatabase } from '../db/fake-database'
+import { PgliteDatabase } from '../db/pglite-database'
 import type { ClaudeClient, ContentBlock, CreateMessageInput } from '../lib/anthropic'
 import { decodeActionRef, encodeActionRef } from '../lib/federation-types'
 import type { SendTextFn, SendTextResult } from '../lib/operator-tools'
-import { FakeDatabase } from '../db/fake-database'
 import { type FederationRouteDeps, federationRoute } from './federation'
 
 const TOKEN = 'fed-secret-token'
 
-function harness(db: FakeDatabase, deps: Partial<FederationRouteDeps> = {}) {
+function harness(db: Database, deps: Partial<FederationRouteDeps> = {}) {
   const app = new Hono<AppEnv>()
   app.route('/', federationRoute({ db, federationServiceToken: TOKEN, ...deps }))
   return app
@@ -170,7 +175,7 @@ function toolUsingClaude(toolName: string, toolInput: Record<string, unknown> = 
   return { client, calls }
 }
 
-const LOC = { id: 'locA', name: 'Alex Co', slug: 'Alex', client_slug: 'Alex', branding: {}, settings: {} }
+const LOC = { id: 'locA', name: 'Alex Co', slug: 'Alex', client_slug: 'Alex', branding: {}, settings: { syntheticAttested: true } }
 
 type TurnResponseLike = { reply: string; proposals: { ref: string; kind: string; approve: string; summary: string }[] }
 
@@ -277,6 +282,34 @@ test('GATE: POST /confirm send_text reaches the rail with the DERIVED e164 (forg
   expect(calls).toEqual([{ e164: '+16025551234', body: 'Hi Jane', nonce: 'n1' }]) // contact's real number, not the forged one
 })
 
+test('R14-07: POST /confirm forwards the route env into the write — staging send_text sinks, rail untouched', async () => {
+  const db = new FakeDatabase()
+  db.enqueue([TEXT_CONTACT]) // resolve(confirm) -> prepareText -> contacts.get
+  db.enqueue([TEXT_CONTACT]) // perform -> prepareText -> contacts.get
+  db.enqueue([{ id: 't-queued' }]) // queued timeline row
+  db.enqueue([]) // sink INSERT (no rows)
+  db.enqueue([{ id: 't-outcome' }]) // outcome timeline row
+  const { fn, calls } = fakeSendText({ ok: true, messageId: 'gw-live' })
+  // The route gates on its OWN env (staging + allowlist); the write path must
+  // see that same env — not ambient process.env — so the send sinks.
+  const res = await postJson(
+    harness(db, {
+      sendText: fn,
+      env: { APP_ENV: 'staging', STAGING_SINK_ALLOWLIST: '+16025551234', FEDERATION_TENANT_ALLOWLIST: 'locA' },
+    }),
+    '/federation/confirm',
+    { verb: 'send_text', params: { contactId: 'c1', body: 'Hi Jane', nonce: 'n-fed-1' } },
+    { ...auth, ...tenant },
+  )
+  expect(res.status).toBe(200)
+  const body = (await res.json()) as ConfirmResultLike
+  expect(body.ok).toBe(true)
+  expect(calls).toHaveLength(0) // rail never consulted in staging
+  const sinkCall = db.calls.find((q) => /INSERT INTO outbound_sink/i.test(q.sql))
+  expect(sinkCall?.params).toContain('+16025551234')
+  expect(body.detail).toMatch(/simulat|staging/i)
+})
+
 test('GATE: POST /confirm send_text with no rail reports it is not set up, never a false send', async () => {
   const db = new FakeDatabase()
   db.enqueue([TEXT_CONTACT])
@@ -297,5 +330,105 @@ test('POST /confirm requires the tenant header and rejects a malformed body', as
   expect((await postJson(harness(db, {}), '/federation/confirm', { verb: 'tag_contact', params: {} }, { ...auth })).status).toBe(400) // no tenant
   expect((await postJson(harness(db, {}), '/federation/confirm', { nope: true }, { ...auth, ...tenant })).status).toBe(400) // bad shape
   expect((await postJson(harness(db, {}), '/federation/confirm', { proposalRef: 'portal:not-ours' }, { ...auth, ...tenant })).status).toBe(400) // un-decodable ref
+})
+
+test('N9: a bearer holder cannot act as an unlisted tenant by changing the header', async () => {
+  const env = { APP_ENV: 'development', FEDERATION_TENANT_ALLOWLIST: 'locA' }
+  const other = { 'x-federation-tenant': 'locB' }
+  // today
+  expect((await get(harness(new FakeDatabase(), { env }), '/federation/today', { ...auth, ...other })).status).toBe(403)
+  // turn (fence runs after the claude check, before any assistant work)
+  const turn = await postJson(
+    harness(new FakeDatabase(), { env, claude: fakeClaude(), resolveSecret: () => 'sk' }),
+    '/federation/turn',
+    { message: 'hi' },
+    { ...auth, ...other },
+  )
+  expect(turn.status).toBe(403)
+  // confirm (writes): fenced before any business logic runs
+  const confirm = await postJson(
+    harness(new FakeDatabase(), { env }),
+    '/federation/confirm',
+    { verb: 'tag_contact', params: {} },
+    { ...auth, ...other },
+  )
+  expect(confirm.status).toBe(403)
+  // ...while the listed tenant still passes the fence (then behaves normally).
+  const db = new FakeDatabase()
+  db.enqueue([])
+  db.enqueue([])
+  expect((await get(harness(db, { env }), '/federation/today', { ...auth, ...tenant })).status).toBe(200)
+})
+
+test('N9: staging with no tenant allowlist refuses every tenant request (fail-closed)', async () => {
+  const env = { APP_ENV: 'staging' }
+  expect((await get(harness(new FakeDatabase(), { env }), '/federation/today', { ...auth, ...tenant })).status).toBe(403)
+  // capabilities carries no tenant, so the fence leaves it alone.
+  expect((await get(harness(new FakeDatabase(), { env }), '/federation/capabilities', { ...auth })).status).toBe(200)
+})
+
+test('§14: tenant header is case-insensitive by name, trimmed by value, exact by membership', async () => {
+  const env = { APP_ENV: 'development', FEDERATION_TENANT_ALLOWLIST: 'locA' }
+  const db = new FakeDatabase()
+  db.enqueue([])
+  db.enqueue([])
+  // Header NAME case varies (HTTP semantics); value with padding trims to the member.
+  const padded = await get(harness(db, { env }), '/federation/today', {
+    ...auth,
+    'X-FEDERATION-TENANT': '  locA  ',
+  })
+  expect(padded.status).toBe(200)
+  // Membership is exact: prefixes, suffixes, and superstrings never match
+  // ('locA ' with padding trims to the member — covered above as 200).
+  for (const other of ['loc', 'locA2', 'xlocA', 'LOCA']) {
+    const res = await get(harness(new FakeDatabase(), { env }), '/federation/today', {
+      ...auth,
+      'x-federation-tenant': other,
+    })
+    expect(res.status).toBe(403)
+  }
+})
+
+test('§14: a production tenant name in staging is refused even with a valid bearer', async () => {
+  const env = { APP_ENV: 'staging', FEDERATION_TENANT_ALLOWLIST: 'locSynth' }
+  const res = await postJson(
+    harness(new FakeDatabase(), { env }),
+    '/federation/confirm',
+    { verb: 'tag_contact', params: {} },
+    { ...auth, 'x-federation-tenant': 'locProd' },
+  )
+  expect(res.status).toBe(403)
+})
+
+test('R13-10: an expired proposalRef is rejected as expired without touching the database', async () => {
+  const stale =
+    'ol:' +
+    Buffer.from(
+      JSON.stringify({ verb: 'tag_contact', params: { contactId: 'c1' }, iat: Date.now() - 25 * 60 * 60 * 1000 }),
+      'utf8',
+    ).toString('base64url')
+  const db = new FakeDatabase()
+  const res = await postJson(harness(db, {}), '/federation/confirm', { proposalRef: stale }, { ...auth, ...tenant })
+  expect(res.status).toBe(400)
+  expect(await res.json()).toMatchObject({ ok: false, reason: 'expired' })
+  expect(db.calls).toHaveLength(0)
+})
+
+test('R13-10: confirming the same proposalRef twice applies once; the retry replays', async () => {
+  const pg = new PGlite()
+  await pg.exec(readFileSync(fileURLToPath(new URL('../../db/schema.sql', import.meta.url)), 'utf8'))
+  const db = new PgliteDatabase(pg)
+  await db.query("INSERT INTO locations (id, name, slug) VALUES ('locA','A','a')")
+  await db.query("INSERT INTO contacts (id, location_id, name) VALUES ('c1','locA','Jane')")
+  // create_task is NOT idempotent by nature: two executions would leave two rows.
+  const ref = encodeActionRef({ verb: 'create_task', params: { contactId: 'c1', title: 'Follow up' } })
+  const app = harness(db, {})
+  const first = await postJson(app, '/federation/confirm', { proposalRef: ref }, { ...auth, ...tenant })
+  const second = await postJson(app, '/federation/confirm', { proposalRef: ref }, { ...auth, ...tenant })
+  expect(first.status).toBe(200)
+  expect(second.status).toBe(200)
+  expect(await second.json()).toEqual(await first.json())
+  const rows = await db.query<{ n: number }>('SELECT count(*)::int AS n FROM contact_tasks WHERE location_id = $1', ['locA'])
+  expect(rows[0]?.n).toBe(1)
 })
 

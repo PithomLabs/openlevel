@@ -1,10 +1,13 @@
+import { randomUUID } from 'node:crypto'
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
 import { z } from 'zod'
 import type { AppEnv } from '../app-env'
+import type { WorkflowDispatch } from '../jobs/workflow-dispatcher'
 import { isUniqueViolation } from '../lib/db-errors'
 import { AppointmentsRepo } from '../repos/appointments-repo'
 import { CalendarsRepo } from '../repos/calendars-repo'
+import { TimelineRepo } from '../repos/timeline-repo'
 import type { Database } from '../db/database'
 
 const APPOINTMENT_STATUS = ['scheduled', 'confirmed', 'completed', 'cancelled', 'no_show'] as const
@@ -88,7 +91,7 @@ const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000
  * GET /appointments?from&to (defaults: now .. +30d); POST /appointments books;
  * PATCH /appointments/:id reschedules ({startsAt,endsAt}) or sets {status}.
  */
-export function calendarsRoute(deps: { db: Database }): Hono<AppEnv> {
+export function calendarsRoute(deps: { db: Database; dispatch?: WorkflowDispatch }): Hono<AppEnv> {
   const app = new Hono<AppEnv>()
 
   app.get('/', async (c) => {
@@ -142,6 +145,25 @@ export function calendarsRoute(deps: { db: Database }): Hono<AppEnv> {
     if (!calendar) return c.json({ error: 'unknown calendar' }, 400)
     try {
       const appointment = await new AppointmentsRepo(deps.db, loc).create(input)
+      // Entry convergence (FIND-07): an operator-booked appointment lands on
+      // the timeline and fires appointment_booked exactly like the public
+      // page — but only when it names a contact (contactless blocks have no
+      // timeline home and enroll no one).
+      if (appointment.contact_id) {
+        await new TimelineRepo(deps.db, loc).add({
+          contactId: appointment.contact_id,
+          type: 'appointment_booked',
+          refTable: 'appointments',
+          refId: appointment.id,
+          payload: { calendar: calendar.name, start: appointment.starts_at },
+        })
+        await deps.dispatch?.({
+          locationId: loc,
+          triggerType: 'appointment_booked',
+          contactId: appointment.contact_id,
+          eventId: randomUUID(),
+        })
+      }
       return c.json({ ok: true, appointment }, 201)
     } catch (err) {
       // The no-double-book index refused this calendar+instant. An honest 409,

@@ -62,7 +62,7 @@ async function setup() {
   await new WorkflowActionsRepo(db, loc).replaceAll(wf.id, [{ type: 'add_tag', config: { tag: 'welcomed' } }])
 
   const dispatch = async (e: Parameters<typeof dispatchWorkflowEvent>[1]) => {
-    await dispatchWorkflowEvent({ db }, e)
+    await dispatchWorkflowEvent({ db, waitsEnabled: true }, e)
   }
   const app = new Hono<AppEnv>()
   app.route('/', publicFunnelsRoute({ db, dispatch }))
@@ -174,4 +174,58 @@ test('POST submit is 404 for an unknown step path', async () => {
     body: JSON.stringify({ values: {} }),
   })
   expect(res.status).toBe(404)
+})
+
+test('R14-01: keyless identical funnel submits stay DISTINCT; only an explicit key replays', async () => {
+  const { app, db } = await setup()
+  const submit = (headers: Record<string, string> = {}) =>
+    app.request('/loc_test/sell-fast/get-offer/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify({
+        values: { full_name: 'Olivia Reed', email: 'olivia@example.com', phone: '+15125550148' },
+      }),
+    })
+
+  expect((await submit()).status).toBe(200)
+  // Same values, no header: a SECOND logical submission, never a replay (R14-01).
+  const retry = await submit()
+  expect(retry.status).toBe(200)
+  expect(await retry.json()).not.toHaveProperty('deduped')
+  const explicit = await submit({ 'Idempotency-Key': 'funnel-retry-1' })
+  expect(explicit.status).toBe(200)
+  const explicitRetry = await submit({ 'Idempotency-Key': 'funnel-retry-1' })
+  expect(await explicitRetry.json()).toMatchObject({ deduped: true })
+  // Three logical submissions (two keyless + one header-keyed), not four.
+  const rows = await db.query<{ n: number }>(
+    "SELECT count(*)::int AS n FROM timeline_events WHERE type = 'funnel_submission'",
+  )
+  expect(rows[0]?.n).toBe(3)
+})
+
+test('R14-01: funnel key reuse with a different payload is a 409 conflict', async () => {
+  const { app } = await setup()
+  const submit = (name: string, headers: Record<string, string> = {}) =>
+    app.request('/loc_test/sell-fast/get-offer/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify({
+        values: { full_name: name, email: 'olivia@example.com', phone: '+15125550148' },
+      }),
+    })
+  expect((await submit('Olivia Reed', { 'Idempotency-Key': 'funnel-clash-1' })).status).toBe(200)
+  const clash = await submit('Olivia R.', { 'Idempotency-Key': 'funnel-clash-1' })
+  expect(clash.status).toBe(409)
+})
+
+test('R14-01: funnel rejects a malformed Idempotency-Key with 400', async () => {
+  const { app } = await setup()
+  const res = await app.request('/loc_test/sell-fast/get-offer/submit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Idempotency-Key': 'x'.repeat(129) },
+    body: JSON.stringify({
+      values: { full_name: 'Olivia Reed', email: 'olivia@example.com', phone: '+15125550148' },
+    }),
+  })
+  expect(res.status).toBe(400)
 })

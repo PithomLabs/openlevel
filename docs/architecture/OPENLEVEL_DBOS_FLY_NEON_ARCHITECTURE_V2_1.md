@@ -315,8 +315,10 @@ appear nowhere in V2.1 as guarantees (prior draft phrasing removed);
 internal DB mutations may still claim exactly-once only with the named
 datasource mechanism. Chatwoot: per-location secrets
 + server-side inbox registry retained as launch requirements; hosting
-status **[unknown]** until owner confirms (M3); secret-in-query deprecated
-with a migration window.
+status **[unknown]** until owner confirms (M3); secret-in-query REMOVED
+2026-11-19 (Review-11 remediation — Fly offers no query scrubbing, so the
+migration window closed with removal, not redaction): inbound webhooks
+verify Chatwoot's native `X-Chatwoot-Signature` HMAC-SHA256 instead.
 
 ## 9. Neon database and privilege model (M1, M12)
 

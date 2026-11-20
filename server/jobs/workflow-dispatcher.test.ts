@@ -37,8 +37,8 @@ test('dispatch enrolls the contact into only live workflows for the matching tri
   const { db, loc } = await setup()
 
   const runs = await dispatchWorkflowEvent(
-    { db },
-    { locationId: loc, triggerType: 'contact_created', contactId: 'c1' },
+    { db, waitsEnabled: true },
+    { locationId: loc, triggerType: 'contact_created', contactId: 'c1', eventId: 'evt-1' },
   )
 
   // Only the one live contact_created workflow fires.
@@ -55,8 +55,37 @@ test('dispatch is a no-op (no runs) when no live workflow matches the trigger', 
   const { db, loc } = await setup()
 
   const runs = await dispatchWorkflowEvent(
-    { db },
-    { locationId: loc, triggerType: 'opportunity_created', contactId: 'c1' },
+    { db, waitsEnabled: true },
+    { locationId: loc, triggerType: 'opportunity_created', contactId: 'c1', eventId: 'evt-2' },
   )
   expect(runs).toEqual([])
+})
+
+test('redelivering the same event_id runs nothing twice (FIND-07)', async () => {
+  const { db, loc } = await setup()
+  const event = { locationId: loc, triggerType: 'contact_created' as const, contactId: 'c1', eventId: 'evt-dup' }
+
+  const first = await dispatchWorkflowEvent({ db, waitsEnabled: true }, event)
+  expect(first).toHaveLength(1)
+  const second = await dispatchWorkflowEvent({ db, waitsEnabled: true }, event)
+  expect(second).toEqual([])
+
+  const runs = await db.query<{ n: number }>(
+    "SELECT count(*)::int AS n FROM workflow_runs WHERE trigger_type = 'contact_created'",
+  )
+  expect(runs[0]?.n).toBe(1)
+})
+
+test('a fresh event_id runs again (dedup is per logical event, FIND-07)', async () => {
+  const { db, loc } = await setup()
+
+  await dispatchWorkflowEvent(
+    { db, waitsEnabled: true },
+    { locationId: loc, triggerType: 'contact_created', contactId: 'c1', eventId: 'evt-a' },
+  )
+  const runs = await dispatchWorkflowEvent(
+    { db, waitsEnabled: true },
+    { locationId: loc, triggerType: 'contact_created', contactId: 'c1', eventId: 'evt-b' },
+  )
+  expect(runs).toHaveLength(1)
 })

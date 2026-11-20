@@ -115,6 +115,11 @@ export function renderSurveyPage(survey: Survey, opts?: RenderOpts): string {
  * Continue validates only the visible step (so required fields can't be skipped)
  * then reveals the next; Back returns; the final step's submit collects EVERY
  * field across all steps and posts once. There is exactly one copy of this.
+ *
+ * Submission identity (R14-01): one stable key per logical response, persisted
+ * in sessionStorage under the endpoint URL (survives reloads/ambiguous
+ * failures) and cleared only on confirmed success — same contract as the
+ * shared capture script.
  */
 export function surveyScript(opts: {
   formId: string
@@ -141,6 +146,14 @@ export function surveyScript(opts: {
   var total=${total};
   var steps=form.querySelectorAll('.ol-step');
   var i=0;
+  var action=form.getAttribute('action');
+  var keySlot='ol-submission:'+action;
+  var subKey=null;
+  try{if(window.sessionStorage)subKey=sessionStorage.getItem(keySlot);}catch(e){}
+  if(!subKey){
+    subKey=(window.crypto&&crypto.randomUUID)?crypto.randomUUID():'ol-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2);
+    try{if(window.sessionStorage)sessionStorage.setItem(keySlot,subKey);}catch(e){}
+  }
   function show(n){
     for(var k=0;k<steps.length;k++){steps[k].classList.toggle('ol-active',k===n);}
     i=n;
@@ -178,10 +191,11 @@ export function surveyScript(opts: {
     var btn=form.querySelector('button[type="submit"]');
     var label=btn?btn.textContent:'';
     if(btn){btn.disabled=true;btn.textContent='Sending…';}
-    fetch(form.getAttribute('action'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({values:values})})
+    fetch(action,{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':subKey},body:JSON.stringify({values:values})})
       .then(function(r){return r.json().catch(function(){return {};});})
       .then(function(data){
         if(data&&data.ok){
+          try{if(window.sessionStorage)sessionStorage.removeItem(keySlot);}catch(e){}
           form.style.display='none';
           var prog=document.querySelector('.ol-progress');if(prog){prog.style.display='none';}
           if(success){success.style.display='block';}

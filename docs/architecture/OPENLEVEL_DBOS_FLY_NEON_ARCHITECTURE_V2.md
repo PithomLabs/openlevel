@@ -1,5 +1,12 @@
 # OpenLevel Architecture V2 — Profitable, DBOS-Powered Agency SaaS
 
+> SUPERSEDED 2026-11-19: historical point-in-time record. Governing
+> architecture is `OPENLEVEL_DBOS_FLY_NEON_ARCHITECTURE_V2_1.md`; staging
+> operations are in `docs/deployment/FLY_NEON.md`. Do not follow the
+> `?secret=` webhook scheme or DBOS topology described below — the
+> remediation removed secret-in-query (Chatwoot native HMAC) and pg-boss
+> remains the engine.
+
 - **Deliverable for:** `docs/plans/prompt5.md` (FINAL ARCHITECTURE V2 DIRECTIVE).
 - **Inputs inspected:** `docs/plans/prompt3.md`, `docs/plans/plan5.md`,
   `docs/architecture/OPENLEVEL_DBOS_FLY_NEON_IMPLEMENTATION_PLAN.md` (V1),

@@ -23,7 +23,7 @@ async function setup() {
   const loc = 'loc_test'
   await db.query("INSERT INTO locations (id, name, slug) VALUES ($1,'Test','test')", [loc])
 
-  const contact = await new ContactsRepo(db, loc).upsertByMatch(
+  const { contact } = await new ContactsRepo(db, loc).upsertByMatch(
     { name: 'Alex Mercer', email: 'Alex@example.com' },
     'manual',
   )
@@ -54,7 +54,7 @@ async function setup() {
   ])
 
   const dispatch = async (e: Parameters<typeof dispatchWorkflowEvent>[1]) => {
-    await dispatchWorkflowEvent({ db }, e)
+    await dispatchWorkflowEvent({ db, waitsEnabled: true }, e)
   }
   const app = new Hono<AppEnv>()
   app.route('/', publicProposalsRoute({ db, dispatch }))

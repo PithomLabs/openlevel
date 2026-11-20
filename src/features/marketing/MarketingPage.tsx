@@ -75,14 +75,22 @@ export function MarketingPage() {
     setNotice(null)
     try {
       const res = await api.sendCampaign(loc, id)
-      const { sent, skipped, failed } = res.delivery
+      const { sent, skipped, failed, quarantined, simulated } = res.delivery
       const extras = [
         skipped > 0 ? `${skipped} skipped` : null,
         failed > 0 ? `${failed} failed` : null,
+        quarantined > 0 ? `${quarantined} quarantined (uncertain — not resent)` : null,
       ].filter(Boolean)
+      // Simulated writes are their own outcome class (R13-07): the notice
+      // counts them, never folds them into sent. "Sent" means accepted by
+      // the provider (R13-20) — handset delivery is not tracked.
+      const shown = res.simulated ? simulated : sent
+      const verb = res.simulated ? 'Simulated' : 'Sent'
       setNotice({
         kind: 'success',
-        text: `Delivered ${sent} message${sent === 1 ? '' : 's'}${extras.length ? ` (${extras.join(', ')})` : ''}.`,
+        text: res.cancelled
+          ? `Stopped after ${sent} message${sent === 1 ? '' : 's'} — the rest were never attempted.`
+          : `${verb} ${shown} message${shown === 1 ? '' : 's'}${extras.length ? ` (${extras.join(', ')})` : ''}.${res.simulated ? ' (staging sink — nothing left the system)' : ''}`,
       })
       await reload()
     } catch (err) {
@@ -92,6 +100,20 @@ export function MarketingPage() {
       })
     } finally {
       setSendingId(null)
+    }
+  }
+
+  async function cancel(id: string) {
+    if (!loc) return
+    try {
+      await api.cancelCampaign(loc, id)
+      setNotice({ kind: 'success', text: 'Cancellation requested — no new messages will go out.' })
+      await reload()
+    } catch (err) {
+      setNotice({
+        kind: 'error',
+        text: err instanceof ApiError ? err.message : 'Could not cancel the campaign.',
+      })
     }
   }
 
@@ -138,7 +160,7 @@ export function MarketingPage() {
             <StatCard label="Campaigns" value={stats.total} />
             <StatCard label="Sent" value={stats.sent} />
             <StatCard label="Drafts" value={stats.drafts} />
-            <StatCard label="Delivered" value={stats.delivered} />
+            <StatCard label="Messages sent" value={stats.delivered} />
           </div>
 
           {campaigns.length === 0 ? (
@@ -160,6 +182,7 @@ export function MarketingPage() {
                       campaign={c}
                       sending={sendingId === c.id}
                       onSend={() => send(c.id)}
+                      onCancel={() => cancel(c.id)}
                     />
                   ))}
                 </div>
@@ -184,10 +207,12 @@ function CampaignRow({
   campaign,
   sending,
   onSend,
+  onCancel,
 }: {
   campaign: Campaign
   sending: boolean
   onSend: () => void
+  onCancel: () => void
 }) {
   const meta = channelMeta(campaign.channel)
   const Icon = meta.icon
@@ -224,17 +249,24 @@ function CampaignRow({
         )}
       </div>
 
-      <div className="flex items-center justify-end">
+      <div className="flex items-center justify-end gap-2">
         {isDraft ? (
           <Button size="sm" variant="outline" onClick={onSend} disabled={sending}>
             <Send className="h-3.5 w-3.5" />
             {sending ? 'Sending…' : 'Send'}
           </Button>
+        ) : campaign.status === 'cancelled' ? (
+          <Badge variant="slate">Cancelled</Badge>
         ) : (
           <div className="text-right">
             <Badge variant="green">Sent</Badge>
             <p className="mt-0.5 text-[11px] text-slate-400">{relativeTime(campaign.sent_at)}</p>
           </div>
+        )}
+        {sending && (
+          <Button size="sm" variant="outline" onClick={onCancel}>
+            Cancel
+          </Button>
         )}
       </div>
     </div>

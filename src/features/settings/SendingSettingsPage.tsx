@@ -283,6 +283,17 @@ function ChannelBadge({ dirty, status }: { dirty: boolean; status: ChannelStatus
   if (dirty || !status) {
     return <span className="text-xs font-medium text-slate-400">Save to check connection</span>
   }
+  if (status.connected && status.simulated) {
+    return (
+      <span
+        className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700"
+        title="Staging sink: sends are recorded, never delivered"
+      >
+        <CheckCircle2 className="h-3.5 w-3.5" />
+        Simulated
+      </span>
+    )
+  }
   if (status.connected) {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">

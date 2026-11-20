@@ -102,7 +102,9 @@ export function AssistantPage() {
     if (!loc) return
     setResolved((r) => ({ ...r, [key]: { status: 'confirming' } }))
     try {
-      const { message } = await api.assistantConfirm(loc, p.verb, p.params)
+      // R14-02: the proposal's stable server id (NOT the render index `key`)
+      // is the idempotency key — retries of THIS card replay server-side.
+      const { message } = await api.assistantConfirm(loc, p.verb, p.params, p.id)
       setResolved((r) => ({ ...r, [key]: { status: 'done' } }))
       setTurns((prev) => [...prev, { role: 'assistant', content: message }])
     } catch (err) {

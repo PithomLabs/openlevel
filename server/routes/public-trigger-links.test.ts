@@ -49,7 +49,7 @@ async function setup() {
 
   // Dispatch runs in-process for the test (prod enqueues to pg-boss).
   const dispatch = async (e: Parameters<typeof dispatchWorkflowEvent>[1]) => {
-    await dispatchWorkflowEvent({ db }, e)
+    await dispatchWorkflowEvent({ db, waitsEnabled: true }, e)
   }
 
   const app = new Hono<AppEnv>()

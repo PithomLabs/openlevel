@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { Hono } from 'hono'
 import type { AppEnv } from '../app-env'
 import type { Database } from '../db/database'
@@ -74,6 +75,7 @@ export function publicTriggerLinksRoute(deps: {
         locationId: loc,
         triggerType: 'trigger_link_clicked',
         contactId,
+        eventId: randomUUID(),
       })
     }
 

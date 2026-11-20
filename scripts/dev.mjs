@@ -65,10 +65,10 @@ const HEALTH_URL = `${API_URL}/health`
 
 async function checkRuntime() {
   const major = Number.parseInt(process.versions.node.split('.')[0], 10)
-  if (!Number.isInteger(major) || major < 22) {
+  if (!Number.isInteger(major) || major < 26) {
     fail(
-      `node ${process.versions.node} is below the repository runtime (Node 22); ` +
-        `select Node 22 in your version manager and retry`,
+      `node ${process.versions.node} is below the repository runtime (Node 26); ` +
+        `select Node 26 in your version manager and retry`,
     )
   }
   try {
@@ -198,11 +198,23 @@ function openBrowser(url) {
   })
 }
 
+/** When a side is DOWN because something else holds its port, say who. */
+async function downSuffix(port) {
+  const failure = await new Promise((resolve) => {
+    const server = createServer()
+    server.once('error', (err) => resolve(classifyBindError(err)))
+    server.listen(port, HOST, () => server.close(() => resolve(null)))
+  })
+  if (failure === null || failure.kind !== 'in-use') return ''
+  const owner = await portOwner(port)
+  return owner ? ` (port held by ${owner})` : ' (port busy, holder unknown)'
+}
+
 async function cmdHealth() {
   const api = await httpOk(HEALTH_URL)
   const web = await httpOk(WEB_URL)
-  console.log(`api ${HEALTH_URL} -> ${api ? 'OK' : 'DOWN'}`)
-  console.log(`web ${WEB_URL} -> ${web ? 'OK' : 'DOWN'}`)
+  console.log(`api ${HEALTH_URL} -> ${api ? 'OK' : `DOWN${await downSuffix(API_PORT)}`}`)
+  console.log(`web ${WEB_URL} -> ${web ? 'OK' : `DOWN${await downSuffix(WEB_PORT)}`}`)
   process.exit(api && web ? 0 : 1)
 }
 

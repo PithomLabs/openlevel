@@ -122,7 +122,7 @@ mutation or authentication.
 - `DATABASE_URL is not set` / guard refusal: export the local URL (see
   above); check `.env.example` for the convention. Never export a Neon or
   production URL for these tasks — the guard will refuse it.
-- `node ... is below the repository runtime`: select Node 22 in your version
+- `node ... is below the repository runtime`: select Node 26 in your version
   manager (`.nvmrc` pins it); `task doctor` shows what is active.
 - `task` / `fly` / `neon` / `psql` not found: `task tools:plan` prints the
   compatible route for your exact host; `task tools:install

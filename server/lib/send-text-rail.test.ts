@@ -96,3 +96,52 @@ test('returns not_configured when url or secret is unset, without calling fetch'
   }
   expect(fetchImpl).not.toHaveBeenCalled()
 })
+
+test('R14-03: staging refuses EVERYTHING at the rail with zero gateway contact (no live fetch)', async () => {
+  // The rail carries no location/db context, so it cannot sink — it refuses,
+  // even for allowlisted numbers. Staging sink-first lives in the caller
+  // (confirmOperatorWrite), which never consults the rail in staging.
+  const fetchImpl = fakeFetch({ ok: true, messageId: 'gw_msg_1' })
+  const env = { APP_ENV: 'staging', STAGING_SINK_ALLOWLIST: '+16025551234' }
+  const send = makeHttpSendText({ url: 'https://gw/text/send', secret: 'sek', fetchImpl, env })
+  expect(await send('+16025551234', 'Hi', 'n1', 'AZ')).toMatchObject({ ok: false, reason: 'refused' })
+  expect(await send('+19998887777', 'Hi', 'n2', 'AZ')).toMatchObject({ ok: false, reason: 'refused' })
+  expect(fetchImpl).not.toHaveBeenCalled()
+})
+
+test('R14-03: restricted production preview refuses with zero gateway contact', async () => {
+  const fetchImpl = fakeFetch({ ok: true, messageId: 'gw_msg_1' })
+  const send = makeHttpSendText({
+    url: 'https://gw/text/send',
+    secret: 'sek',
+    fetchImpl,
+    env: { APP_ENV: 'production', RESTRICTED_PREVIEW: 'true' },
+  })
+  const result = await send('+16025551234', 'Hi', 'n1', 'AZ')
+  expect(result).toMatchObject({ ok: false, reason: 'refused' })
+  expect(fetchImpl).not.toHaveBeenCalled()
+})
+
+test('R14-03: malformed environment identity refuses with zero gateway contact', async () => {
+  const fetchImpl = fakeFetch({ ok: true, messageId: 'gw_msg_1' })
+  const send = makeHttpSendText({
+    url: 'https://gw/text/send',
+    secret: 'sek',
+    fetchImpl,
+    env: { APP_ENV: 'prod' },
+  })
+  expect(await send('+16025551234', 'Hi', 'n1', 'AZ')).toMatchObject({ ok: false, reason: 'refused' })
+  expect(fetchImpl).not.toHaveBeenCalled()
+})
+
+test('staging fence: a missing allowlist refuses everything (fail-closed)', async () => {
+  const fetchImpl = vi.fn()
+  const send = makeHttpSendText({
+    url: 'https://gw/text/send',
+    secret: 'sek',
+    fetchImpl,
+    env: { APP_ENV: 'staging' },
+  })
+  expect(await send('+16025551234', 'Hi', 'n1', 'AZ')).toMatchObject({ ok: false, reason: 'refused' })
+  expect(fetchImpl).not.toHaveBeenCalled()
+})

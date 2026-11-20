@@ -2,6 +2,7 @@ import type { Database } from '../db/database'
 import { LocationsRepo } from '../repos/locations-repo'
 import { runToolConversation } from './agent-runner'
 import { type ClaudeClient, type MessageParam } from './anthropic'
+import { INFERENCE_REFUSAL, isInferenceAllowed } from './inference-gate'
 import { buildOperatorSystemPrompt } from './operator-config'
 import { buildOperatorTools, type ProposedAction } from './operator-tools'
 import { resolveSecret as defaultResolveSecret } from './vault'
@@ -40,7 +41,7 @@ export interface AssistantDeps {
 
 export interface AssistantResult {
   ok: boolean
-  status: 200 | 400 | 404
+  status: 200 | 400 | 403 | 404
   reply?: string
   /** Changes the agent PREPARED this turn for the operator to confirm. Empty when
    *  the turn only answered. The UI renders one confirm card per proposal; POST
@@ -91,6 +92,13 @@ export async function runOperatorAssistant(
 
   const location = await new LocationsRepo(db).getById(locationId)
   if (!location) return { ok: false, status: 404, error: 'location not found' }
+
+  // Inference provenance (R14-12): the model sees ONLY owner-attested
+  // synthetic tenants. Refused before key resolution — no secret lookup for
+  // a tenant the model must never see.
+  if (!isInferenceAllowed(location.settings as Record<string, unknown> | null)) {
+    return { ok: false, status: 403, error: INFERENCE_REFUSAL }
+  }
 
   const slug = location.client_slug ?? location.slug
   const apiKey = getSecret(`${slug}:anthropic:api_key`)

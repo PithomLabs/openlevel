@@ -1,0 +1,182 @@
+# Product image packaging + smoke test (OpenLevel staging MVP).
+#
+# Separate workflow from phase0.yml on purpose: Phase 0 jobs are the DBOS
+# proof harness and stay untouched; this job proves the PRODUCT image
+# (Hono + pg-boss + Vite SPA) builds, migrates, boots against real
+# PostgreSQL 18.7, serves, and shuts down cleanly — then (master pushes
+# only) publishes that EXACT image to GHCR for digest promotion.
+#
+# Hermetic by construction: temp credentials inline (obviously fake),
+# ephemeral service PostgreSQL, no Fly/Neon resources, no remote deploys.
+# The only secrets.* use is the ephemeral GITHUB_TOKEN for the GHCR push,
+# which never runs on pull requests. Temp secrets are 40 chars to satisfy
+# strict validation.
+#
+# Promotion model (FIND-10): CI builds once; every environment deploys the
+# published digest (never rebuilds). Deviating (rebuilding per env) breaks
+# the release identity the runbook's promotion procedure depends on.
+name: product-packaging
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "26"
+  PG_IMAGE: "postgres:18.7"
+  APP_PORT: "8792"
+  # CI-only database URL (ephemeral service PG, no SSL there; Neon always
+  # requires TLS — the sslmode=disable below is local-service-only).
+  CI_DATABASE_URL: "postgres://postgres:cipackaging@localhost:5432/appdb?sslmode=disable"
+  CI_SESSION_SECRET: "ci-packaging-session-secret-padding-00000001"
+  CI_WEBHOOK_SECRET: "ci-packaging-webhook-secret-padding-00000001"
+
+jobs:
+  packaging:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # packages:write is required for the master-only GHCR push below. It is
+    # granted at job level (the push cannot live in a separate job without
+    # rebuilding, which would break digest identity); the push steps
+    # additionally gate on the master branch, and PRs from forks get a
+    # read-only token regardless.
+    permissions:
+      contents: read
+      packages: write
+    services:
+      postgres:
+        image: postgres:18.7
+        env:
+          POSTGRES_PASSWORD: cipackaging
+          POSTGRES_DB: appdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - run: npm ci --no-audit --no-fund
+
+      - name: Fail-closed deployable-surface validation
+        run: node scripts/toolchain.mjs env validate
+
+      - name: Build the product image
+        run: docker build --build-arg RELEASE_COMMIT=${{ github.sha }} -t product:ci .
+
+      - name: Verify boot chain + bundle inside the image
+        run: |
+          docker run --rm product:ci sh -c "test -f server/index.ts && ls db/migrations/*.sql | grep -q . && test -f db/catalog-snapshot.json && test -f dist/index.html && ls dist/assets | grep -q . && echo 'boot chain + bundle OK'"
+          docker run --rm product:ci node --import tsx -e "console.log('prod image: tsx loader ok')"
+          docker run --rm product:ci dbmate --version
+          docker run --rm product:ci sh -c "(ls .env* 2>/dev/null && echo 'LEAK: .env in image' && exit 1) || echo 'no .env in image'"
+
+      - name: Release-command equivalent against ephemeral PG 18.7
+        run: |
+          docker run --rm --network host -e DATABASE_URL="$CI_DATABASE_URL" product:ci npm run db:migrate:release
+          docker run --rm --network host -e DATABASE_URL="$CI_DATABASE_URL" product:ci dbmate --no-dump-schema --migrations-dir ./db/migrations status | tee /tmp/dbmate-status.txt
+          APPLIED="$(grep -o 'Applied: [0-9]*' /tmp/dbmate-status.txt | grep -o '[0-9]*')"
+          EXPECTED="$(ls db/migrations/*.sql | wc -l | tr -d ' ')"
+          test "$APPLIED" = "$EXPECTED" && echo "applied $APPLIED/$EXPECTED migrations"
+          grep -q "Pending: 0" /tmp/dbmate-status.txt
+
+      - name: Snapshot-drift check (committed catalog matches fresh apply)
+        run: |
+          DATABASE_URL="$CI_DATABASE_URL" SNAPSHOT_OUT=/tmp/catalog-check.json npm run db:snapshot
+          diff db/catalog-snapshot.json /tmp/catalog-check.json && echo "snapshot matches fresh apply"
+
+      - name: Idempotent reapply (second run is a no-op, data survives)
+        run: |
+          docker run --rm --network host postgres:18.7 psql "$CI_DATABASE_URL" -c "INSERT INTO locations (id,name,slug) VALUES ('ci-canary','CI Canary','ci-canary')"
+          docker run --rm --network host -e DATABASE_URL="$CI_DATABASE_URL" product:ci npm run db:migrate:release
+          docker run --rm --network host postgres:18.7 psql "$CI_DATABASE_URL" -t -c "SELECT id FROM locations WHERE id='ci-canary'" | grep -q ci-canary
+
+      - name: Boot the app container (DB-backed)
+        run: |
+          docker run --network host \
+            -e NODE_ENV=production -e APP_ENV=staging \
+            -e DATABASE_URL="$CI_DATABASE_URL" \
+            -e SESSION_SECRET="$CI_SESSION_SECRET" -e CHATWOOT_WEBHOOK_SECRET="$CI_WEBHOOK_SECRET" \
+            -e PORT="$APP_PORT" \
+            --name ci-app -d product:ci
+          for i in $(seq 1 45); do
+            if curl -sf "http://127.0.0.1:${APP_PORT}/ready" >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -sf "http://127.0.0.1:${APP_PORT}/ready" | grep -q '"ready":true'
+          curl -sf "http://127.0.0.1:${APP_PORT}/health" | grep -q '"ok":true'
+          curl -sf "http://127.0.0.1:${APP_PORT}/" | grep -q 'id="root"'
+          curl -sf "http://127.0.0.1:${APP_PORT}/contacts" | grep -q 'id="root"'
+          echo "boot + health + ready + SPA OK"
+
+      - name: Prove no seed ran (locations holds only the CI canary)
+        run: |
+          docker logs ci-app 2>&1 | tee /tmp/app-boot.log
+          if grep -qi "seeded demo tenant" /tmp/app-boot.log; then echo "LEAK: seed ran during boot"; exit 1; fi
+          grep -q "release ${{ github.sha }}" /tmp/app-boot.log || { echo "boot log missing release line"; exit 1; }
+          test "$(docker run --rm --network host postgres:18.7 psql "$CI_DATABASE_URL" -t -c 'SELECT count(*) FROM locations' | tr -d ' ')" = "1"
+
+      - name: Run the smoke probe inventory against the booted app
+        run: |
+          SMOKE_TARGET=local SMOKE_BASE_URL="http://127.0.0.1:${APP_PORT}" SMOKE_APP_ENV=staging \
+            SMOKE_DATABASE_URL="$CI_DATABASE_URL" SMOKE_WEBHOOK_SECRET="$CI_WEBHOOK_SECRET" \
+            SMOKE_CONTAINER=ci-app SMOKE_IMAGE=product:ci \
+            SMOKE_TRANSCRIPT=/tmp/smoke-transcript-local.txt \
+            npx tsx scripts/smoke/run.ts
+
+      - name: SIGTERM shutdown exits 0 with an ordered drain
+        if: always()
+        run: |
+          docker stop -t 25 ci-app >/dev/null || true
+          docker logs ci-app 2>&1 | tee /tmp/app-stop.log
+          grep -q "shutdown: complete" /tmp/app-stop.log
+          grep -q "shutdown clean" /tmp/app-stop.log
+          test "$(docker inspect ci-app --format='{{.State.ExitCode}}')" = "0"
+          docker rm ci-app >/dev/null || true
+
+      - name: Publish the smoked image to GHCR (master pushes only)
+        if: github.ref == 'refs/heads/master'
+        run: |
+          OWNER_LC="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          IMAGE="ghcr.io/${OWNER_LC}/openlevel"
+          echo "$IMAGE" > /tmp/ghcr-image.txt
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+          docker tag product:ci "${IMAGE}:${{ github.sha }}"
+          docker push "${IMAGE}:${{ github.sha }}"
+          docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE}:${{ github.sha }}" | tee /tmp/image-ref.txt
+          echo "### Published image" >> "$GITHUB_STEP_SUMMARY"
+          echo "Committed ref: \`$(cat /tmp/image-ref.txt)\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload release evidence (image ref)
+        if: github.ref == 'refs/heads/master'
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-image-ref
+          path: /tmp/image-ref.txt
+          retention-days: 90
+
+      - name: Prove no credential leaked into any captured log
+        if: always()
+        run: |
+          if grep -q "cipackaging" /tmp/dbmate-status.txt /tmp/app-boot.log /tmp/app-stop.log /tmp/smoke-transcript-local.txt; then echo "LEAK: credential in logs"; exit 1; fi
+          echo "no credentials in captured logs"
+
+      - name: Upload smoke transcript
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-transcript-local
+          path: /tmp/smoke-transcript-local.txt
+          retention-days: 30

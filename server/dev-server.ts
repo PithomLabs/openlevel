@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { serve } from '@hono/node-server'
 import { PGlite } from '@electric-sql/pglite'
+import { reportError } from './lib/secrets'
 import { resolveDevConfig } from '../scripts/lib/dev-env.mjs'
 import { seedDatabase } from '../db/seed'
 import { PgliteDatabase } from './db/pglite-database'
@@ -67,7 +68,7 @@ async function prerunWelcomeWorkflow(db: PgliteDatabase): Promise<void> {
   )
   for (const contact of contacts) {
     await runWorkflow(
-      { db },
+      { db, waitsEnabled: true },
       { locationId, workflowId: workflow.id, contactId: contact.id, triggerType: 'contact_created' },
     )
   }
@@ -80,7 +81,7 @@ async function main() {
   try {
     devConfig = resolveDevConfig(process.env)
   } catch (err) {
-    console.error(`openlevel DEV api: ${err instanceof Error ? err.message : String(err)}`)
+    reportError('openlevel DEV api: config invalid', err)
     process.exit(2)
   }
   const pg = new PGlite() // in-memory; fresh on every boot
@@ -101,10 +102,14 @@ async function main() {
     secure: false,
     claude: devClaude,
     sendMessage: devSendMessage,
+    // Local-only explicit opt-in: dev keeps in-process waits so wait workflows
+    // can be exercised on the loopback box (PGlite resets on restart, so a
+    // stranded dev run evaporates). Never enabled by default anywhere else.
+    waitsEnabled: true,
     // No pg-boss against pglite — run the dispatch in-process so triggers fire
     // (and `wait` steps defer via the runner's default setTimeout) right here.
     dispatch: async (e) => {
-      await dispatchWorkflowEvent({ db }, e)
+      await dispatchWorkflowEvent({ db, waitsEnabled: true }, e)
     },
   })
 
@@ -114,7 +119,7 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error(err)
+  reportError('dev-server', err)
   process.exit(1)
 })
 
