@@ -123,6 +123,21 @@ async function main(): Promise<void> {
         const { stdout } = await sh(transcript, 'docker', ['inspect', config.image, '--format', '{{.Id}}'])
         return stdout.trim()
       },
+      inspectEnv: async () => {
+        const { stdout } = await sh(transcript, 'docker', [
+          'inspect',
+          config.container,
+          '--format',
+          '{{json .Config.Env}}',
+        ])
+        const pairs = JSON.parse(stdout) as string[]
+        const env: Record<string, string> = {}
+        for (const pair of pairs) {
+          const eq = pair.indexOf('=')
+          if (eq > 0) env[pair.slice(0, eq)] = pair.slice(eq + 1)
+        }
+        return env
+      },
       stop: async () => {
         await sh(transcript, 'docker', ['stop', '-t', '25', config.container])
         const inspected = await sh(transcript, 'docker', ['inspect', config.container, '--format', '{{.State.ExitCode}}'])

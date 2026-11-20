@@ -35,6 +35,23 @@ test('staging allowlist matches emails case-insensitively, others exactly', () =
   expect(() => assertSinkRecipient(fence, '+15551230002')).toThrow(FenceRefusal)
 })
 
+test('FIND-01: malformed non-empty entries are inert — kept, never matching, never throwing', () => {
+  const fence = stagingFenceFromEnv({
+    APP_ENV: 'staging',
+    STAGING_SINK_ALLOWLIST: 'alice@example.com, not a recipient!!!, http://evil.example/x, Alice@Example.com',
+  })
+  expect(fence.sink).toBe(true)
+  // The legitimate entry still works (duplicates collapse harmlessly).
+  expect(() => assertSinkRecipient(fence, 'alice@example.com')).not.toThrow()
+  // Junk entries widen nothing: matching is exact-equality only, so
+  // substrings, prefixes, and unrelated recipients all refuse. (An
+  // identical junk string identical-matches by design — harmless, since no
+  // routable recipient looks like that and staging never delivers live.)
+  for (const to of ['evil.example', 'alice', 'alice@example', 'bob@example.com', '']) {
+    expect(() => assertSinkRecipient(fence, to)).toThrow(FenceRefusal)
+  }
+})
+
 test('refusal carries a 403 status and names no recipient value beyond the policy', () => {
   const fence = stagingFenceFromEnv({ APP_ENV: 'staging', STAGING_SINK_ALLOWLIST: 'a@x.co' })
   try {

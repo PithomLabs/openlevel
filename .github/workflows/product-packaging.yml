@@ -105,10 +105,15 @@ jobs:
 
       - name: Boot the app container (DB-backed)
         run: |
+          # FIND-01: explicit synthetic sink allowlist (non-routable 555 test
+          # number + reserved example.com recipient, matching the smoke
+          # runner's sink identities). Without it the staging policy
+          # correctly refuses every recipient and the sink probes fail.
           docker run --network host \
             -e NODE_ENV=production -e APP_ENV=staging \
             -e DATABASE_URL="$CI_DATABASE_URL" \
             -e SESSION_SECRET="$CI_SESSION_SECRET" -e CHATWOOT_WEBHOOK_SECRET="$CI_WEBHOOK_SECRET" \
+            -e STAGING_SINK_ALLOWLIST="+15551230001,smoke@example.com" \
             -e PORT="$APP_PORT" \
             --name ci-app -d product:ci
           for i in $(seq 1 45); do

@@ -21,6 +21,7 @@ export interface RunHooks {
   logs: () => Promise<string>
   digest: () => Promise<string>
   stop?: () => Promise<{ exitCode: number; logs: string }>
+  inspectEnv?: () => Promise<Record<string, string>>
 }
 
 function env(name: string, fallback = ''): string {
@@ -96,6 +97,7 @@ export async function runSmoke(
     anon,
     sql,
     logs,
+    inspectEnv: hooks.inspectEnv ?? null,
     noteOutcome: (o) => {
       outcomes.push(o)
       state.outcomesJson = JSON.stringify(outcomes)
@@ -243,6 +245,21 @@ async function main(): Promise<void> {
         digest: async () => {
           const { stdout } = await sh(transcript, 'docker', ['inspect', config.image, '--format', '{{.Id}}'])
           return stdout.trim()
+        },
+        inspectEnv: async () => {
+          const { stdout } = await sh(transcript, 'docker', [
+            'inspect',
+            config.container,
+            '--format',
+            '{{json .Config.Env}}',
+          ])
+          const pairs = JSON.parse(stdout) as string[]
+          const env: Record<string, string> = {}
+          for (const pair of pairs) {
+            const eq = pair.indexOf('=')
+            if (eq > 0) env[pair.slice(0, eq)] = pair.slice(eq + 1)
+          }
+          return env
         },
       }
     : {

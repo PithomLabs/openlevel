@@ -46,6 +46,12 @@ export interface SmokeCtx {
   sql: SmokeSql | null
   /** Fetch captured logs (docker logs / fly logs). */
   logs: () => Promise<string>
+  /**
+   * Container environment (local target only, via docker inspect). Null on
+   * remote targets, where env values are not retrievable — env-dependent
+   * probes NOT RUN there.
+   */
+  inspectEnv: (() => Promise<Record<string, string>>) | null
   /** Record an observed send outcome for the aggregate probe. */
   noteOutcome: (outcome: string) => void
   state: Record<string, string>
@@ -509,6 +515,32 @@ export const PROBE_RUNNERS: Record<string, (ctx: SmokeCtx) => Promise<ProbeOutco
   'digest-proof': async (ctx) => {
     // Implemented by run.ts (needs shell access); this entry keeps the inventory total.
     return skip('digest is recorded by the runner harness (see transcript header)')
+  },
+
+  'provider-config-absence': async (ctx) => {
+    // FIND-01/PR46 strengthening: log-hostname absence alone does not prove
+    // zero provider calls. This probe audits the container's own env: with
+    // no provider endpoint URLs and no provider credentials present,
+    // adapters cannot construct, so no authenticated provider invocation is
+    // possible. All findings are names/counts only — values never printed.
+    if (!ctx.inspectEnv) return skip('container env not retrievable on this target')
+    const env = await ctx.inspectEnv()
+    const urlVars = ['GATEWAY_TEXT_URL', 'GATEWAY_PUSH_URL'].filter((k) => (env[k] ?? '') !== '')
+    if (urlVars.length > 0) return fail(`provider endpoint URLs configured: ${urlVars.join(',')}`)
+    // Known app secrets are allowlisted BY NAME (consumed as HMAC/DB material,
+    // never sent to providers); everything else is provider-suspect surface.
+    const knownAppSecrets = new Set(['DATABASE_URL', 'SESSION_SECRET', 'CHATWOOT_WEBHOOK_SECRET'])
+    const credNameRe = /(ANTHROPIC|TWILIO|BREVO|STRIPE|SQUARE|OPENAI|BEEPER|CHATWOOT|RESEND|SENDGRID|POSTMARK).*(KEY|TOKEN|SECRET|SID|PASSWORD)/i
+    const credVars = Object.keys(env).filter((k) => !knownAppSecrets.has(k) && credNameRe.test(k))
+    if (credVars.length > 0) return fail(`provider credential names present: ${credVars.join(',')}`)
+    const shapes = [/sk_live_/, /AC[0-9a-fA-F]{32}/, /gh[pousr]_/, /whsec_/, /xox[baprs]-/, /sk-ant-/]
+    let hits = 0
+    for (const [k, v] of Object.entries(env)) {
+      if (knownAppSecrets.has(k)) continue
+      if (shapes.some((re) => re.test(v))) hits++
+    }
+    if (hits > 0) return fail(`${hits} env value(s) match live-credential shapes (count only, values never printed)`)
+    return ok(`no provider URLs, credential names, or live-credential shapes in container env (${Object.keys(env).length} vars audited)`)
   },
 
   'provider-non-invocation': async (ctx) => {

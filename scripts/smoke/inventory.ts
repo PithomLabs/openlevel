@@ -49,6 +49,7 @@ export const PROBES: ProbeSpec[] = [
   { id: 'push-suppression', name: 'Inbound triggers observable push suppression', targets: ['local', 'staging', 'preview'], sources: ['D08', 'S14', 'P09'] },
   { id: 'sigterm', name: 'Graceful SIGTERM shutdown (local: live stop; remote: prior-stop log evidence)', targets: ['local', 'staging', 'preview'], sources: ['D10', 'S16'] },
   { id: 'credential-scan', name: 'Zero credential patterns in captured logs + transcript', targets: ['local', 'staging', 'preview'], sources: ['D11'] },
+  { id: 'provider-config-absence', name: 'No provider URLs/credentials in container env (adapters cannot construct)', targets: ['local'], sources: ['D12'] },
   { id: 'provider-non-invocation', name: 'Every send outcome simulated/refused; zero live provider contact', targets: ['local', 'staging', 'preview'], sources: ['D12', 'S15', 'P12'] },
   { id: 'no-staging-reuse', name: 'Preview uses its own DB/app identity (no staging reuse)', targets: ['preview'], sources: ['P11'] },
   { id: 'digest-proof', name: 'Running image digest recorded (staging == preview)', targets: ['local', 'staging', 'preview'], sources: ['S-record', 'P-record'] },
